@@ -1,0 +1,20 @@
+[package]
+name = "wise-backend"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+actix-web = "4.4"
+actix-cors = "0.6"
+mongodb = "2.8"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+jsonwebtoken = "9.2"
+bcrypt = "0.15"
+dotenv = "0.15"
+chrono = { version = "0.4", features = ["serde"] }
+futures = "0.3"
+thiserror = "1.0"
+validator = { version = "0.16", features = ["derive"] }
+env_logger = "0.10"
