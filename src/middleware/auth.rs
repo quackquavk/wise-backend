@@ -1,9 +1,9 @@
 use actix_web::{
     dev::ServiceRequest, error::ErrorUnauthorized, http::header, Error, HttpMessage,
+    dev::Extensions,
 };
 use jsonwebtoken::{decode, DecodingKey, TokenData, Validation};
 use serde::{Deserialize, Serialize};
-use std::future::{ready, Ready};
 
 use crate::config::get_jwt_secret;
 
@@ -44,18 +44,18 @@ pub async fn validate_token(req: &ServiceRequest) -> Result<TokenData<Claims>, E
     .map_err(|_| ErrorUnauthorized("Invalid token"))
 }
 
-pub fn get_current_user(req: &ServiceRequest) -> Option<AuthenticatedUser> {
-    req.extensions().get::<AuthenticatedUser>().cloned()
+pub fn get_current_user(extensions: &Extensions) -> Option<AuthenticatedUser> {
+    extensions.get::<AuthenticatedUser>().cloned()
 }
 
 // Helper function to require authentication and get user
-pub fn require_auth(req: &ServiceRequest) -> Result<AuthenticatedUser, Error> {
-    get_current_user(req).ok_or_else(|| ErrorUnauthorized("Authentication required"))
+pub fn require_auth(extensions: &Extensions) -> Result<AuthenticatedUser, Error> {
+    get_current_user(extensions).ok_or_else(|| ErrorUnauthorized("Authentication required"))
 }
 
 // Helper function to require admin role
-pub fn require_admin(req: &ServiceRequest) -> Result<AuthenticatedUser, Error> {
-    let user = require_auth(req)?;
+pub fn require_admin(extensions: &Extensions) -> Result<AuthenticatedUser, Error> {
+    let user = require_auth(extensions)?;
     if user.role == "Admin" {
         Ok(user)
     } else {

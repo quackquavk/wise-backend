@@ -2,7 +2,7 @@ pub mod auth;
 
 use actix_web::{
     dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform},
-    Error,
+    Error, HttpMessage,
 };
 use futures::future::LocalBoxFuture;
 use std::{
@@ -53,17 +53,15 @@ where
         let svc = self.service.clone();
 
         Box::pin(async move {
-            match validate_token(&req).await {
-                Ok(token_data) => {
-                    let user = AuthenticatedUser {
-                        email: token_data.claims.sub,
-                        role: token_data.claims.role,
-                    };
-                    req.extensions_mut().insert(user);
-                    svc.call(req).await
-                }
-                Err(_) => svc.call(req).await,
+            // Only validate token if Authorization header is present
+            if let Ok(token_data) = validate_token(&req).await {
+                let user = AuthenticatedUser {
+                    email: token_data.claims.sub,
+                    role: token_data.claims.role,
+                };
+                req.extensions_mut().insert(user);
             }
+            svc.call(req).await
         })
     }
 } 
