@@ -6,7 +6,11 @@ mod models;
 use actix_cors::Cors;
 use actix_web::{middleware::Logger, web, App, HttpServer};
 use dotenv::dotenv;
-use handlers::auth::{login, register};
+use handlers::{
+    auth::{login, register},
+    protected_example::{protected_route, admin_route, get_current_user},
+    ideas::{submit_idea, get_ideas, get_pending_ideas, approve_idea, vote_idea},
+};
 use middleware::Authentication;
 
 #[actix_web::main]
@@ -37,6 +41,14 @@ async fn main() -> std::io::Result<()> {
                 web::scope("/api")
                     .service(register)
                     .service(login)
+                    .service(protected_route)
+                    .service(admin_route)
+                    .service(get_current_user)
+                    .service(submit_idea)
+                    .service(get_ideas)
+                    .service(get_pending_ideas)
+                    .service(approve_idea)
+                    .service(vote_idea)
             )
     })
     .bind(("127.0.0.1", port))?

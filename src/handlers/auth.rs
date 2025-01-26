@@ -1,4 +1,4 @@
-use actix_web::{web, HttpResponse, post};
+use actix_web::{web, HttpResponse, post, put};
 use bcrypt::{hash, verify, DEFAULT_COST};
 use chrono::Utc;
 use jsonwebtoken::{encode, EncodingKey, Header};
@@ -21,6 +21,11 @@ struct Claims {
 #[derive(Serialize)]
 struct AuthResponse {
     token: String,
+}
+
+#[derive(Deserialize)]
+pub struct PromoteToAdminDto {
+    pub email: String,
 }
 
 #[post("/register")]
@@ -125,4 +130,31 @@ pub async fn login(
     .unwrap();
 
     HttpResponse::Ok().json(AuthResponse { token })
+}
+
+#[put("/promote-admin")]
+pub async fn promote_to_admin(
+    db: web::Data<Database>,
+    user_data: web::Json<PromoteToAdminDto>,
+) -> HttpResponse {
+    let users_collection = db.collection::<User>("users");
+    
+    // Update user role to admin
+    match users_collection
+        .update_one(
+            mongodb::bson::doc! { "email": &user_data.email },
+            mongodb::bson::doc! { "$set": { "role": "Admin", "updated_at": mongodb::bson::DateTime::from_millis(Utc::now().timestamp_millis()) } },
+            None,
+        )
+        .await
+    {
+        Ok(result) => {
+            if result.modified_count == 0 {
+                HttpResponse::NotFound().json("User not found")
+            } else {
+                HttpResponse::Ok().json("User promoted to admin successfully")
+            }
+        }
+        Err(_) => HttpResponse::InternalServerError().json("Failed to promote user"),
+    }
 } 
