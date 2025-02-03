@@ -1,6 +1,6 @@
 # Wise Backend API Documentation
 
-This is the backend API for the Wise Suggestions platform. It provides endpoints for user authentication, idea submission, and idea management.
+This is the backend API for the Wise Suggestions platform. It provides endpoints for user authentication (via Google OAuth2), idea submission, and idea management.
 
 ## Base URL
 ```
@@ -8,47 +8,122 @@ http://localhost:8080/api
 ```
 
 ## Authentication
-Most endpoints require JWT authentication. Include the token in the Authorization header:
-```
-Authorization: Bearer <your-jwt-token>
+
+The application uses Google OAuth2 for authentication. Here's how to implement it in your frontend:
+
+### 1. Initiating Google Login
+
+When the user clicks "Continue with Google" or similar button, redirect them to:
+```javascript
+// Example using vanilla JavaScript
+window.location.href = 'http://localhost:8080/api/auth/google';
+
+// Example using React Router
+navigate('/api/auth/google');
 ```
 
-## Endpoints
+### 2. Handling the OAuth Callback
+
+After Google authentication, users will be redirected to your frontend URL with either:
+- Success: `?token=YOUR_JWT_TOKEN`
+- Error: `?error=ERROR_MESSAGE`
+
+Example implementation in React:
+```javascript
+// AuthCallback.jsx
+import { useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+
+function AuthCallback() {
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    // Get URL parameters
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('token');
+    const error = params.get('error');
+
+    if (token) {
+      // Store token in localStorage
+      localStorage.setItem('auth_token', token);
+      // Update auth state (e.g., using context or redux)
+      // Redirect to dashboard
+      navigate('/dashboard');
+    } else if (error) {
+      // Handle error
+      console.error('Authentication error:', error);
+      navigate('/login', { state: { error } });
+    }
+  }, []);
+
+  return <div>Processing authentication...</div>;
+}
+```
+
+### 3. Using the JWT Token
+
+For all authenticated requests, include the token in the Authorization header:
+```javascript
+// Example API call
+async function fetchProtectedData() {
+  const token = localStorage.getItem('auth_token');
+  
+  const response = await fetch('http://localhost:8080/api/protected', {
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    }
+  });
+  
+  if (response.status === 401) {
+    // Token expired or invalid
+    localStorage.removeItem('auth_token');
+    window.location.href = '/login';
+    return;
+  }
+  
+  return await response.json();
+}
+```
+
+### 4. Checking Authentication Status
+
+```javascript
+// Example auth check function
+function isAuthenticated() {
+  const token = localStorage.getItem('auth_token');
+  return !!token; // Returns true if token exists
+}
+
+// Example protected route component
+function ProtectedRoute({ children }) {
+  const navigate = useNavigate();
+  
+  useEffect(() => {
+    if (!isAuthenticated()) {
+      navigate('/login');
+    }
+  }, []);
+  
+  return children;
+}
+```
+
+## API Endpoints
 
 ### Authentication
 
-#### Register User
+#### Google OAuth Login
 ```http
-POST /register
-Content-Type: application/json
-
-{
-    "username": "string",     // 3-30 characters
-    "email": "string",       // valid email format
-    "password": "string"     // minimum 6 characters
-}
-
-Response: 201 Created
-{
-    "message": "User created successfully"
-}
+GET /auth/google
 ```
+Initiates the Google OAuth2 flow. Redirects to Google's consent screen.
 
-#### Login
+#### OAuth Callback
 ```http
-POST /login
-Content-Type: application/json
-
-{
-    "email": "string",
-    "password": "string"
-}
-
-Response: 200 OK
-{
-    "token": "jwt-token-string"
-}
+GET /auth/google/callback
 ```
+Internal endpoint that handles Google's response. Frontend doesn't need to implement this.
 
 #### Get Current User
 ```http
@@ -152,9 +227,9 @@ Response: 200 OK
 }
 ```
 
-## Error Responses
+## Error Handling
 
-### Common Error Formats
+### Common Error Responses
 ```json
 {
     "401": "Authentication required",
@@ -165,44 +240,137 @@ Response: 200 OK
 }
 ```
 
-### Validation Errors Example
-```json
-{
-    "email": ["Invalid email format"],
-    "password": ["Password must be at least 6 characters long"],
-    "title": ["Title must be between 5 and 100 characters"]
+## Frontend Implementation Guide
+
+### 1. Setup Authentication Context (React example)
+```javascript
+// AuthContext.js
+import { createContext, useState, useContext, useEffect } from 'react';
+
+const AuthContext = createContext(null);
+
+export function AuthProvider({ children }) {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    checkAuth();
+  }, []);
+
+  async function checkAuth() {
+    const token = localStorage.getItem('auth_token');
+    if (token) {
+      try {
+        const response = await fetch('http://localhost:8080/api/user/me', {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+        if (response.ok) {
+          const userData = await response.json();
+          setUser(userData);
+        } else {
+          localStorage.removeItem('auth_token');
+        }
+      } catch (error) {
+        console.error('Auth check failed:', error);
+      }
+    }
+    setLoading(false);
+  }
+
+  return (
+    <AuthContext.Provider value={{ user, loading, checkAuth }}>
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+export const useAuth = () => useContext(AuthContext);
+```
+
+### 2. Login Button Component
+```javascript
+// LoginButton.js
+function LoginButton() {
+  return (
+    <button
+      onClick={() => {
+        window.location.href = 'http://localhost:8080/api/auth/google';
+      }}
+      className="google-login-button"
+    >
+      Continue with Google
+    </button>
+  );
 }
 ```
 
-## Notes for Frontend Implementation
+### 3. Protected Route Setup
+```javascript
+// ProtectedRoute.js
+import { Navigate } from 'react-router-dom';
+import { useAuth } from './AuthContext';
 
-1. **Authentication Flow**:
-   - After successful login, store the JWT token securely
-   - Include the token in all subsequent requests that require authentication
-   - Token expires after 24 hours
+function ProtectedRoute({ children }) {
+  const { user, loading } = useAuth();
 
-2. **Admin Features**:
-   - Check user.role === "Admin" to show/hide admin features
-   - Only admins can view pending ideas and approve them
+  if (loading) {
+    return <div>Loading...</div>;
+  }
 
-3. **Idea Submission**:
-   - New ideas start with is_approved = false
-   - Only approved ideas appear in the public feed
-   - Users can toggle their upvotes (add/remove)
+  if (!user) {
+    return <Navigate to="/login" />;
+  }
 
-4. **Upvote Handling**:
-   - The GET /ideas endpoint includes has_upvoted field when user is authenticated
-   - Use has_upvoted to show appropriate UI (filled/unfilled upvote button)
-   - Upvote endpoint toggles the state (adds or removes upvote)
+  return children;
+}
+```
 
-5. **Error Handling**:
-   - Always check for error responses
-   - Display appropriate error messages to users
-   - Redirect to login if 401 error is received
+### 4. Example Usage in App
+```javascript
+// App.js
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { AuthProvider } from './AuthContext';
+import ProtectedRoute from './ProtectedRoute';
+import AuthCallback from './AuthCallback';
+import Dashboard from './Dashboard';
+import Login from './Login';
+
+function App() {
+  return (
+    <AuthProvider>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route path="/auth/callback" element={<AuthCallback />} />
+          <Route
+            path="/dashboard"
+            element={
+              <ProtectedRoute>
+                <Dashboard />
+              </ProtectedRoute>
+            }
+          />
+        </Routes>
+      </BrowserRouter>
+    </AuthProvider>
+  );
+}
+```
 
 ## Development Setup
 
 1. Backend runs on port 8080
-2. CORS is enabled for all origins during development
-3. All dates are in ISO format
-4. All IDs are MongoDB ObjectIds 
+2. Frontend should run on port 5173 (Vite's default port)
+3. Make sure your Google OAuth credentials are properly configured:
+   - Authorized JavaScript origins: `http://localhost:5173`
+   - Authorized redirect URIs: `http://localhost:8080/api/auth/google/callback`
+
+## Security Notes
+
+1. Always store the JWT token securely (localStorage or httpOnly cookies)
+2. Never expose the token in URLs except for the initial OAuth callback
+3. Always validate token expiration
+4. Clear token on logout or authentication errors
+5. Use HTTPS in production 

@@ -2,15 +2,17 @@ use actix_web::{web, HttpResponse, post, put, get, HttpRequest};
 use bcrypt::{hash, verify, DEFAULT_COST};
 use chrono::Utc;
 use jsonwebtoken::{encode, EncodingKey, Header};
-use mongodb::Database;
+use mongodb::{Database, bson::doc};
 use oauth2::{
     basic::BasicClient, AuthUrl, ClientId, ClientSecret, CsrfToken,
-    RedirectUrl, Scope, TokenUrl,
+    RedirectUrl, Scope, TokenUrl, TokenResponse, StandardTokenResponse,
+    EmptyExtraTokenFields, basic::BasicTokenType
 };
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 use std::env;
 use url::Url;
+use log::{info, warn, error};
 
 use crate::{
     models::user::{CreateUserDto, LoginDto, User, UserRole},
@@ -199,12 +201,16 @@ pub async fn promote_to_admin(
 
 #[get("/auth/google")]
 pub async fn google_auth() -> HttpResponse {
+    info!("Starting Google OAuth flow");
     let client = create_oauth_client();
-    let (auth_url, _csrf_token) = client
+    let (auth_url, csrf_token) = client
         .authorize_url(CsrfToken::new_random)
         .add_scope(Scope::new("email".to_string()))
         .add_scope(Scope::new("profile".to_string()))
         .url();
+
+    info!("Generated Google auth URL with CSRF token: {}", csrf_token.secret());
+    info!("Redirecting to Google auth URL");
 
     HttpResponse::Found()
         .append_header(("Location", auth_url.to_string()))
@@ -216,7 +222,10 @@ pub async fn google_auth_callback(
     req: HttpRequest,
     db: web::Data<Database>,
 ) -> HttpResponse {
+    info!("Received callback from Google OAuth");
     let query_string = req.query_string();
+    info!("Callback query string: {}", query_string);
+    
     let frontend_url = env::var("FRONTEND_URL").expect("FRONTEND_URL must be set");
     
     // Parse the query string
@@ -230,13 +239,18 @@ pub async fn google_auth_callback(
         .map(|(_, value)| value.clone());
     
     let code = match code {
-        Some(code) => code,
+        Some(code) => {
+            info!("Successfully extracted authorization code");
+            code
+        }
         None => {
+            error!("No authorization code found in callback");
             return redirect_with_error(&frontend_url, "No authorization code received");
         }
     };
 
     // Exchange the code for a token
+    info!("Exchanging authorization code for token");
     let client = create_oauth_client();
     let token_result = client
         .exchange_code(oauth2::AuthorizationCode::new(code))
@@ -244,13 +258,18 @@ pub async fn google_auth_callback(
         .await;
 
     let token = match token_result {
-        Ok(token) => token,
+        Ok(token) => {
+            info!("Successfully exchanged code for token");
+            token
+        }
         Err(e) => {
+            error!("Failed to exchange authorization code for token: {}", e);
             return redirect_with_error(&frontend_url, &format!("Token exchange failed: {}", e));
         }
     };
 
     // Get user info from Google
+    info!("Fetching user info from Google");
     let client = reqwest::Client::new();
     let user_info_resp = client
         .get("https://www.googleapis.com/oauth2/v2/userinfo")
@@ -261,25 +280,35 @@ pub async fn google_auth_callback(
     let google_user = match user_info_resp {
         Ok(response) => {
             match response.json::<GoogleUserInfo>().await {
-                Ok(user) => user,
+                Ok(user) => {
+                    info!("Successfully retrieved user info for email: {}", user.email);
+                    user
+                }
                 Err(e) => {
+                    error!("Failed to parse user info response: {}", e);
                     return redirect_with_error(&frontend_url, &format!("Failed to parse user info: {}", e));
                 }
             }
         }
         Err(e) => {
+            error!("Failed to get user info from Google: {}", e);
             return redirect_with_error(&frontend_url, &format!("Failed to get user info: {}", e));
         }
     };
 
     // Find or create user
+    info!("Looking up user in database");
     let users_collection = db.collection::<User>("users");
     let user = match users_collection
         .find_one(doc! { "email": &google_user.email }, None)
         .await
     {
-        Ok(Some(user)) => user,
+        Ok(Some(user)) => {
+            info!("Found existing user: {}", user.email);
+            user
+        }
         Ok(None) => {
+            info!("Creating new user for: {}", google_user.email);
             // Create new user
             let new_user = User {
                 id: None,
@@ -292,20 +321,26 @@ pub async fn google_auth_callback(
             };
 
             match users_collection.insert_one(new_user.clone(), None).await {
-                Ok(_) => new_user,
+                Ok(_) => {
+                    info!("Successfully created new user");
+                    new_user
+                }
                 Err(e) => {
+                    error!("Failed to create new user: {}", e);
                     return redirect_with_error(&frontend_url, &format!("Failed to create user: {}", e));
                 }
             }
         }
         Err(e) => {
+            error!("Database error while looking up user: {}", e);
             return redirect_with_error(&frontend_url, &format!("Database error: {}", e));
         }
     };
 
     // Generate JWT
+    info!("Generating JWT token");
     let claims = Claims {
-        sub: user.email,
+        sub: user.email.clone(),
         role: format!("{:?}", user.role),
         exp: (Utc::now().timestamp() + 24 * 3600) as usize, // 24 hours
     };
@@ -315,22 +350,29 @@ pub async fn google_auth_callback(
         &claims,
         &EncodingKey::from_secret(get_jwt_secret().as_ref()),
     ) {
-        Ok(t) => t,
+        Ok(t) => {
+            info!("Successfully generated JWT token");
+            t
+        }
         Err(e) => {
+            error!("Failed to create JWT token: {}", e);
             return redirect_with_error(&frontend_url, &format!("Failed to create token: {}", e));
         }
     };
 
+    info!("Authentication successful for user: {}", user.email);
     // Redirect to frontend with token
     let mut redirect_url = Url::parse(&frontend_url).unwrap();
     redirect_url.set_query(Some(&format!("token={}", token)));
     
+    info!("Redirecting to frontend with token");
     HttpResponse::Found()
         .append_header(("Location", redirect_url.to_string()))
         .finish()
 }
 
 fn redirect_with_error(frontend_url: &str, error: &str) -> HttpResponse {
+    warn!("Redirecting with error: {}", error);
     let mut url = Url::parse(frontend_url).unwrap();
     url.set_query(Some(&format!("error={}", error)));
     

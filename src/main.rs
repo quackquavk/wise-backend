@@ -7,7 +7,7 @@ use actix_cors::Cors;
 use actix_web::{middleware::Logger, web, App, HttpServer};
 use dotenv::dotenv;
 use handlers::{
-    auth::{login, register},
+    auth::{google_auth, google_auth_callback},
     protected_example::{protected_route, admin_route, get_current_user},
     ideas::{submit_idea, get_ideas, get_pending_ideas, approve_idea, vote_idea},
 };
@@ -23,12 +23,13 @@ async fn main() -> std::io::Result<()> {
         .expect("Failed to connect to database");
 
     let port = config::get_port();
+    let frontend_url = std::env::var("FRONTEND_URL").expect("FRONTEND_URL must be set");
 
     println!("Server running at http://localhost:{}", port);
 
     HttpServer::new(move || {
         let cors = Cors::default()
-            .allow_any_origin()
+            .allowed_origin(&frontend_url)
             .allow_any_method()
             .allow_any_header();
 
@@ -39,8 +40,8 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(database.clone()))
             .service(
                 web::scope("/api")
-                    .service(register)
-                    .service(login)
+                    .service(google_auth)
+                    .service(google_auth_callback)
                     .service(protected_route)
                     .service(admin_route)
                     .service(get_current_user)

@@ -1,4 +1,4 @@
-use actix_web::{post, get, put, delete, HttpMessage, HttpRequest, HttpResponse, web};
+use actix_web::{post, get, put, HttpMessage, HttpRequest, HttpResponse, web};
 use chrono::Utc;
 use mongodb::{Database, bson::{doc, oid::ObjectId}};
 use validator::Validate;
