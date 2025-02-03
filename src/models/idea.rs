@@ -13,6 +13,7 @@ pub struct Idea {
     pub description: String,
     pub is_approved: bool,
     pub upvotes: i32,
+    pub upvoted_by: Vec<ObjectId>,
     pub created_at: DateTime,
     pub updated_at: DateTime,
 }

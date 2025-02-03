@@ -88,6 +88,7 @@ Response: 201 Created
 #### Get All Approved Ideas
 ```http
 GET /ideas
+Authorization: Bearer <token> (optional)
 
 Response: 200 OK
 [
@@ -100,6 +101,7 @@ Response: 200 OK
         "description": "string",
         "is_approved": true,
         "upvotes": number,
+        "has_upvoted": boolean,  // Only included if user is authenticated
         "created_at": "timestamp",
         "updated_at": "timestamp"
     }
@@ -139,14 +141,14 @@ Response: 200 OK
 }
 ```
 
-#### Upvote an Idea
+#### Toggle Upvote on an Idea
 ```http
 POST /ideas/{idea_id}/upvote
 Authorization: Bearer <token>
 
 Response: 200 OK
 {
-    "message": "Upvote recorded successfully"
+    "message": "Upvote added successfully" | "Upvote removed successfully"
 }
 ```
 
@@ -186,9 +188,14 @@ Response: 200 OK
 3. **Idea Submission**:
    - New ideas start with is_approved = false
    - Only approved ideas appear in the public feed
-   - Users can upvote ideas multiple times
+   - Users can toggle their upvotes (add/remove)
 
-4. **Error Handling**:
+4. **Upvote Handling**:
+   - The GET /ideas endpoint includes has_upvoted field when user is authenticated
+   - Use has_upvoted to show appropriate UI (filled/unfilled upvote button)
+   - Upvote endpoint toggles the state (adds or removes upvote)
+
+5. **Error Handling**:
    - Always check for error responses
    - Display appropriate error messages to users
    - Redirect to login if 401 error is received
