@@ -143,10 +143,10 @@ Response: 200 OK
 
 ### Ideas Management
 
-#### Submit New Idea
+#### Submit New Idea (Admin Only)
 ```http
 POST /ideas
-Authorization: Bearer <token>
+Authorization: Bearer <admin-token>
 Content-Type: application/json
 
 {
@@ -160,7 +160,9 @@ Response: 201 Created
 }
 ```
 
-#### Get All Approved Ideas
+Note: Only administrators can submit new ideas. Ideas are automatically approved upon submission.
+
+#### Get All Ideas
 ```http
 GET /ideas
 Authorization: Bearer <token> (optional)
@@ -183,36 +185,34 @@ Response: 200 OK
 ]
 ```
 
-#### Get Pending Ideas (Admin Only)
+#### Get Single Idea
 ```http
-GET /ideas/pending
-Authorization: Bearer <admin-token>
-
-Response: 200 OK
-[
-    {
-        "id": "string",
-        "user_id": "string",
-        "username": "string",
-        "email": "string",
-        "title": "string",
-        "description": "string",
-        "is_approved": false,
-        "upvotes": number,
-        "created_at": "timestamp",
-        "updated_at": "timestamp"
-    }
-]
-```
-
-#### Approve Idea (Admin Only)
-```http
-PUT /ideas/{idea_id}/approve
-Authorization: Bearer <admin-token>
+GET /ideas/{idea_id}
+Authorization: Bearer <token> (optional)
 
 Response: 200 OK
 {
-    "message": "Idea approved successfully"
+    "id": "string",
+    "user_id": "string",
+    "username": "string",
+    "email": "string",
+    "title": "string",
+    "description": "string",
+    "is_approved": true,
+    "upvotes": number,
+    "has_upvoted": boolean,  // Only included if user is authenticated
+    "created_at": "timestamp",
+    "updated_at": "timestamp"
+}
+
+Response: 404 Not Found
+{
+    "message": "Idea not found"
+}
+
+Response: 400 Bad Request
+{
+    "message": "Invalid idea ID"
 }
 ```
 
@@ -223,8 +223,35 @@ Authorization: Bearer <token>
 
 Response: 200 OK
 {
-    "message": "Upvote added successfully" | "Upvote removed successfully"
+    "message": "Upvote added successfully"
 }
+
+// When calling the same endpoint again (removing upvote)
+Response: 200 OK
+{
+    "message": "Upvote removed successfully"
+}
+```
+
+The upvote endpoint acts as a toggle:
+1. First call: Adds an upvote if the user hasn't upvoted
+2. Second call: Removes the upvote if the user has already upvoted
+3. Each user can have at most one upvote on an idea at any time
+4. The upvote count is automatically incremented/decremented
+
+Example usage:
+```bash
+# Add upvote
+curl -X POST http://localhost:8080/api/ideas/{idea_id}/upvote \
+  -H "Authorization: Bearer <your-token>"
+
+# Remove upvote (call the same endpoint again)
+curl -X POST http://localhost:8080/api/ideas/{idea_id}/upvote \
+  -H "Authorization: Bearer <your-token>"
+
+# Check upvote status
+curl http://localhost:8080/api/ideas/{idea_id} \
+  -H "Authorization: Bearer <your-token>"
 ```
 
 ## Error Handling

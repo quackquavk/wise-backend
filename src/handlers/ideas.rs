@@ -22,9 +22,9 @@ pub async fn submit_idea(
         return HttpResponse::BadRequest().json(errors);
     }
 
-    // Get authenticated user
+    // Get authenticated admin user
     let extensions = req.extensions();
-    let auth_user = match require_auth(&extensions) {
+    let auth_user = match require_admin(&extensions) {
         Ok(user) => user,
         Err(e) => return HttpResponse::Unauthorized().json(e.to_string()),
     };
@@ -42,7 +42,7 @@ pub async fn submit_idea(
 
     let user_id = user.id.unwrap();
 
-    // Create new idea
+    // Create new idea (now automatically approved since only admins can create)
     let new_idea = Idea {
         id: None,
         user_id,
@@ -50,7 +50,7 @@ pub async fn submit_idea(
         email: user.email,
         title: idea_data.title.clone(),
         description: idea_data.description.clone(),
-        is_approved: false,
+        is_approved: true, // Auto-approved since admin created it
         upvotes: 0,
         upvoted_by: Vec::new(),
         created_at: mongodb::bson::DateTime::from_millis(Utc::now().timestamp_millis()),
@@ -71,41 +71,55 @@ pub async fn get_ideas(req: HttpRequest, db: web::Data<Database>) -> HttpRespons
     let extensions = req.extensions();
     let current_user = require_auth(&extensions).ok();
     
+    log::info!("Fetching ideas. User authenticated: {}", current_user.is_some());
+    
     let ideas_collection = db.collection::<Idea>("ideas");
     match ideas_collection
-        .find(doc! { "is_approved": true }, None)
+        .find(doc! {}, None)  // Remove the is_approved filter temporarily for testing
         .await
     {
         Ok(cursor) => {
+            log::info!("Successfully got cursor from MongoDB");
             match futures::stream::TryStreamExt::try_collect::<Vec<_>>(cursor).await {
                 Ok(ideas) => {
+                    log::info!("Successfully collected {} ideas", ideas.len());
                     // If user is authenticated, include whether they upvoted each idea
                     if let Some(user) = current_user {
-                        let user_id = match get_user_id(&db, &user.email).await {
-                            Ok(id) => id,
-                            Err(_) => return HttpResponse::InternalServerError().json("Failed to get user details"),
-                        };
-
-                        let ideas_with_upvote_status: Vec<_> = ideas.into_iter().map(|idea| {
-                            let mut idea_json = serde_json::to_value(&idea).unwrap();
-                            if let serde_json::Value::Object(ref mut map) = idea_json {
-                                map.insert(
-                                    "has_upvoted".to_string(),
-                                    serde_json::Value::Bool(idea.upvoted_by.contains(&user_id))
-                                );
+                        log::info!("Adding upvote status for user: {}", user.email);
+                        match get_user_id(&db, &user.email).await {
+                            Ok(user_id) => {
+                                let ideas_with_upvote_status: Vec<_> = ideas.into_iter().map(|idea| {
+                                    let mut idea_json = serde_json::to_value(&idea).unwrap();
+                                    if let serde_json::Value::Object(ref mut map) = idea_json {
+                                        map.insert(
+                                            "has_upvoted".to_string(),
+                                            serde_json::Value::Bool(idea.upvoted_by.contains(&user_id))
+                                        );
+                                    }
+                                    idea_json
+                                }).collect();
+                                
+                                HttpResponse::Ok().json(ideas_with_upvote_status)
+                            },
+                            Err(e) => {
+                                log::error!("Failed to get user ID: {}", e);
+                                HttpResponse::InternalServerError().json("Failed to get user details")
                             }
-                            idea_json
-                        }).collect();
-                        
-                        HttpResponse::Ok().json(ideas_with_upvote_status)
+                        }
                     } else {
                         HttpResponse::Ok().json(ideas)
                     }
                 },
-                Err(_) => HttpResponse::InternalServerError().json("Failed to fetch ideas"),
+                Err(e) => {
+                    log::error!("Failed to collect ideas from cursor: {}", e);
+                    HttpResponse::InternalServerError().json("Failed to fetch ideas")
+                }
             }
         }
-        Err(_) => HttpResponse::InternalServerError().json("Failed to fetch ideas"),
+        Err(e) => {
+            log::error!("Failed to get cursor from MongoDB: {}", e);
+            HttpResponse::InternalServerError().json("Failed to fetch ideas")
+        }
     }
 }
 
@@ -236,6 +250,7 @@ pub async fn vote_idea(
         }
     };
 
+    // Update the idea
     match ideas_collection
         .update_one(doc! { "_id": idea_id }, update, None)
         .await
@@ -253,5 +268,51 @@ pub async fn vote_idea(
             }
         }
         Err(_) => HttpResponse::InternalServerError().json("Failed to update upvote"),
+    }
+}
+
+#[get("/ideas/{id}")]
+pub async fn get_idea(
+    req: HttpRequest,
+    db: web::Data<Database>,
+    id: web::Path<String>,
+) -> HttpResponse {
+    // Get current user if authenticated (optional)
+    let extensions = req.extensions();
+    let current_user = require_auth(&extensions).ok();
+    
+    // Convert string ID to ObjectId
+    let idea_id = match ObjectId::parse_str(id.as_str()) {
+        Ok(id) => id,
+        Err(_) => return HttpResponse::BadRequest().json("Invalid idea ID"),
+    };
+
+    let ideas_collection = db.collection::<Idea>("ideas");
+    match ideas_collection
+        .find_one(doc! { "_id": idea_id }, None)
+        .await
+    {
+        Ok(Some(idea)) => {
+            // If user is authenticated, include whether they upvoted this idea
+            if let Some(user) = current_user {
+                match get_user_id(&db, &user.email).await {
+                    Ok(user_id) => {
+                        let mut idea_json = serde_json::to_value(&idea).unwrap();
+                        if let serde_json::Value::Object(ref mut map) = idea_json {
+                            map.insert(
+                                "has_upvoted".to_string(),
+                                serde_json::Value::Bool(idea.upvoted_by.contains(&user_id))
+                            );
+                        }
+                        HttpResponse::Ok().json(idea_json)
+                    },
+                    Err(_) => HttpResponse::InternalServerError().json("Failed to get user details")
+                }
+            } else {
+                HttpResponse::Ok().json(idea)
+            }
+        },
+        Ok(None) => HttpResponse::NotFound().json("Idea not found"),
+        Err(_) => HttpResponse::InternalServerError().json("Failed to fetch idea"),
     }
 } 

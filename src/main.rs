@@ -9,7 +9,7 @@ use dotenv::dotenv;
 use handlers::{
     auth::{google_auth, google_auth_callback},
     protected_example::{protected_route, admin_route, get_current_user},
-    ideas::{submit_idea, get_ideas, get_pending_ideas, approve_idea, vote_idea},
+    ideas::{submit_idea, get_ideas, get_pending_ideas, approve_idea, vote_idea, get_idea},
 };
 use middleware::Authentication;
 
@@ -47,6 +47,7 @@ async fn main() -> std::io::Result<()> {
                     .service(get_current_user)
                     .service(submit_idea)
                     .service(get_ideas)
+                    .service(get_idea)
                     .service(get_pending_ideas)
                     .service(approve_idea)
                     .service(vote_idea)
