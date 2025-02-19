@@ -1,6 +1,36 @@
 use mongodb::bson::{oid::ObjectId, DateTime};
 use serde::{Deserialize, Serialize};
 use validator::Validate;
+use std::fmt;
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum IdeaStatus {
+    Idea,
+    InProgress,
+    Launched,
+}
+
+impl fmt::Display for IdeaStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            IdeaStatus::Idea => write!(f, "idea"),
+            IdeaStatus::InProgress => write!(f, "in_progress"),
+            IdeaStatus::Launched => write!(f, "launched"),
+        }
+    }
+}
+
+impl IdeaStatus {
+    // Helper method to get status as string for MongoDB
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            IdeaStatus::Idea => "idea",
+            IdeaStatus::InProgress => "in_progress",
+            IdeaStatus::Launched => "launched",
+        }
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Idea {
@@ -12,6 +42,7 @@ pub struct Idea {
     pub title: String,
     pub description: String,
     pub is_approved: bool,
+    pub status: IdeaStatus,
     pub upvotes: i32,
     pub upvoted_by: Vec<ObjectId>,
     pub created_at: DateTime,
@@ -24,6 +55,11 @@ pub struct CreateIdeaDto {
     pub title: String,
     #[validate(length(min = 20, max = 1000, message = "Description must be between 20 and 1000 characters"))]
     pub description: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateIdeaStatusDto {
+    pub status: IdeaStatus,
 }
 
 #[derive(Debug, Deserialize)]
