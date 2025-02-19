@@ -1,0 +1,21 @@
+# Git
+.git
+.gitignore
+
+# Rust
+target/
+Cargo.lock
+
+# Environment
+.env
+.env.*
+!.env.prod
+
+# Editor
+.vscode/
+.idea/
+
+# Misc
+README.md
+docker-compose.yml
+Dockerfile 
