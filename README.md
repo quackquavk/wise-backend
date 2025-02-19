@@ -7,6 +7,20 @@ This is the backend API for the Wise Suggestions platform. It provides endpoints
 http://localhost:8080/api
 ```
 
+## Rate Limiting
+
+The API implements rate limiting to ensure fair usage:
+- 10 requests per minute per IP address
+- Burst capacity of 10 requests
+- When limit is exceeded, requests will receive a 429 (Too Many Requests) response
+
+Rate limit headers in responses:
+```http
+X-RateLimit-Limit: 10       // Requests per minute allowed
+X-RateLimit-Remaining: 8    // Remaining requests in current window
+X-RateLimit-Reset: 47       // Seconds until the rate limit resets
+```
+
 ## Authentication
 
 The application uses Google OAuth2 for authentication. Here's how to implement it in your frontend:
@@ -143,7 +157,7 @@ Response: 200 OK
 
 ### Ideas Management
 
-#### Submit New Idea
+#### Submit New Idea (Authenticated Users)
 ```http
 POST /ideas
 Authorization: Bearer <token>
@@ -160,7 +174,9 @@ Response: 201 Created
 }
 ```
 
-#### Get All Approved Ideas
+Note: Any authenticated user can submit ideas. Ideas are automatically approved.
+
+#### Get All Ideas
 ```http
 GET /ideas
 Authorization: Bearer <token> (optional)
@@ -175,6 +191,7 @@ Response: 200 OK
         "title": "string",
         "description": "string",
         "is_approved": true,
+        "status": "idea" | "in_progress" | "launched",
         "upvotes": number,
         "has_upvoted": boolean,  // Only included if user is authenticated
         "created_at": "timestamp",
@@ -183,36 +200,48 @@ Response: 200 OK
 ]
 ```
 
-#### Get Pending Ideas (Admin Only)
+Note: Ideas are sorted by creation date (newest first).
+
+#### Get Ideas by Status
 ```http
-GET /ideas/pending
-Authorization: Bearer <admin-token>
+GET /ideas/status/{status}
+status: "idea" | "in_progress" | "launched"
+Authorization: Bearer <token> (optional)
 
 Response: 200 OK
 [
     {
-        "id": "string",
-        "user_id": "string",
-        "username": "string",
-        "email": "string",
-        "title": "string",
-        "description": "string",
-        "is_approved": false,
-        "upvotes": number,
-        "created_at": "timestamp",
-        "updated_at": "timestamp"
+        // Same as Get All Ideas response
     }
 ]
 ```
 
-#### Approve Idea (Admin Only)
+Note: Ideas within each status are sorted by creation date (newest first).
+
+Response: 400 Bad Request
+{
+    "message": "Invalid status"
+}
+```
+
+#### Update Idea Status (Admin Only)
 ```http
-PUT /ideas/{idea_id}/approve
+PUT /ideas/{idea_id}/status
 Authorization: Bearer <admin-token>
+Content-Type: application/json
+
+{
+    "status": "idea" | "in_progress" | "launched"
+}
 
 Response: 200 OK
 {
-    "message": "Idea approved successfully"
+    "message": "Idea status updated successfully"
+}
+
+Response: 400 Bad Request
+{
+    "message": "Invalid status"
 }
 ```
 
@@ -226,6 +255,12 @@ Response: 200 OK
     "message": "Upvote added successfully" | "Upvote removed successfully"
 }
 ```
+
+The upvote endpoint acts as a toggle:
+1. First call: Adds an upvote if the user hasn't upvoted
+2. Second call: Removes the upvote if the user has already upvoted
+3. Each user can have at most one upvote on an idea at any time
+4. The upvote count is automatically incremented/decremented
 
 ## Error Handling
 

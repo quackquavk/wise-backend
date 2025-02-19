@@ -6,7 +6,7 @@ use validator::Validate;
 use crate::{
     middleware::auth::{require_auth, require_admin},
     models::{
-        idea::{Idea, CreateIdeaDto},
+        idea::{Idea, CreateIdeaDto, IdeaStatus, UpdateIdeaStatusDto},
         user::User,
     },
 };
@@ -50,7 +50,8 @@ pub async fn submit_idea(
         email: user.email,
         title: idea_data.title.clone(),
         description: idea_data.description.clone(),
-        is_approved: false,
+        is_approved: true, // Auto-approve since we removed admin-only restriction
+        status: IdeaStatus::Idea, // Default status
         upvotes: 0,
         upvoted_by: Vec::new(),
         created_at: mongodb::bson::DateTime::from_millis(Utc::now().timestamp_millis()),
@@ -73,7 +74,10 @@ pub async fn get_ideas(req: HttpRequest, db: web::Data<Database>) -> HttpRespons
     
     let ideas_collection = db.collection::<Idea>("ideas");
     match ideas_collection
-        .find(doc! { "is_approved": true }, None)
+        .find(doc! { "is_approved": true }, 
+            mongodb::options::FindOptions::builder()
+                .sort(doc! { "created_at": -1 })
+                .build())
         .await
     {
         Ok(cursor) => {
@@ -109,23 +113,57 @@ pub async fn get_ideas(req: HttpRequest, db: web::Data<Database>) -> HttpRespons
     }
 }
 
-#[get("/ideas/pending")]
-pub async fn get_pending_ideas(req: HttpRequest, db: web::Data<Database>) -> HttpResponse {
-    // Verify admin access
+#[get("/ideas/status/{status}")]
+pub async fn get_ideas_by_status(
+    req: HttpRequest,
+    db: web::Data<Database>,
+    status: web::Path<String>,
+) -> HttpResponse {
+    // Get current user if authenticated (optional)
     let extensions = req.extensions();
-    let _admin = match require_admin(&extensions) {
-        Ok(user) => user,
-        Err(e) => return HttpResponse::Unauthorized().json(e.to_string()),
+    let current_user = require_auth(&extensions).ok();
+    
+    // Parse status
+    let status = match status.as_str() {
+        "idea" => IdeaStatus::Idea,
+        "in_progress" => IdeaStatus::InProgress,
+        "launched" => IdeaStatus::Launched,
+        _ => return HttpResponse::BadRequest().json("Invalid status"),
     };
 
     let ideas_collection = db.collection::<Idea>("ideas");
     match ideas_collection
-        .find(doc! { "is_approved": false }, None)
+        .find(doc! { "is_approved": true, "status": status.as_str() },
+            mongodb::options::FindOptions::builder()
+                .sort(doc! { "created_at": -1 })
+                .build())
         .await
     {
         Ok(cursor) => {
             match futures::stream::TryStreamExt::try_collect::<Vec<_>>(cursor).await {
-                Ok(ideas) => HttpResponse::Ok().json(ideas),
+                Ok(ideas) => {
+                    if let Some(user) = current_user {
+                        let user_id = match get_user_id(&db, &user.email).await {
+                            Ok(id) => id,
+                            Err(_) => return HttpResponse::InternalServerError().json("Failed to get user details"),
+                        };
+
+                        let ideas_with_upvote_status: Vec<_> = ideas.into_iter().map(|idea| {
+                            let mut idea_json = serde_json::to_value(&idea).unwrap();
+                            if let serde_json::Value::Object(ref mut map) = idea_json {
+                                map.insert(
+                                    "has_upvoted".to_string(),
+                                    serde_json::Value::Bool(idea.upvoted_by.contains(&user_id))
+                                );
+                            }
+                            idea_json
+                        }).collect();
+                        
+                        HttpResponse::Ok().json(ideas_with_upvote_status)
+                    } else {
+                        HttpResponse::Ok().json(ideas)
+                    }
+                },
                 Err(_) => HttpResponse::InternalServerError().json("Failed to fetch ideas"),
             }
         }
@@ -133,20 +171,21 @@ pub async fn get_pending_ideas(req: HttpRequest, db: web::Data<Database>) -> Htt
     }
 }
 
-#[put("/ideas/{id}/approve")]
-pub async fn approve_idea(
+#[put("/ideas/{id}/status")]
+pub async fn update_idea_status(
     req: HttpRequest,
     db: web::Data<Database>,
     id: web::Path<String>,
+    status_update: web::Json<UpdateIdeaStatusDto>,
 ) -> HttpResponse {
-    // Verify admin access
+    // Only admins can update status
     let extensions = req.extensions();
     if let Err(e) = require_admin(&extensions) {
         return HttpResponse::Unauthorized().json(e.to_string());
     }
 
     // Convert string ID to ObjectId
-    let object_id = match ObjectId::parse_str(id.as_str()) {
+    let idea_id = match ObjectId::parse_str(id.as_str()) {
         Ok(id) => id,
         Err(_) => return HttpResponse::BadRequest().json("Invalid idea ID"),
     };
@@ -154,8 +193,13 @@ pub async fn approve_idea(
     let ideas_collection = db.collection::<Idea>("ideas");
     match ideas_collection
         .update_one(
-            doc! { "_id": object_id },
-            doc! { "$set": { "is_approved": true, "updated_at": mongodb::bson::DateTime::from_millis(Utc::now().timestamp_millis()) } },
+            doc! { "_id": idea_id },
+            doc! { 
+                "$set": { 
+                    "status": status_update.status.as_str(),
+                    "updated_at": mongodb::bson::DateTime::from_millis(Utc::now().timestamp_millis())
+                }
+            },
             None,
         )
         .await
@@ -164,10 +208,10 @@ pub async fn approve_idea(
             if result.modified_count == 0 {
                 HttpResponse::NotFound().json("Idea not found")
             } else {
-                HttpResponse::Ok().json("Idea approved successfully")
+                HttpResponse::Ok().json("Idea status updated successfully")
             }
         }
-        Err(_) => HttpResponse::InternalServerError().json("Failed to approve idea"),
+        Err(_) => HttpResponse::InternalServerError().json("Failed to update idea status"),
     }
 }
 

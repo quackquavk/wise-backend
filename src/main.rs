@@ -5,11 +5,13 @@ mod models;
 
 use actix_cors::Cors;
 use actix_web::{middleware::Logger, web, App, HttpServer};
+use actix_governor::{Governor, GovernorConfigBuilder};
+use std::time::Duration;
 use dotenv::dotenv;
 use handlers::{
     auth::{google_auth, google_auth_callback},
     protected_example::{protected_route, admin_route, get_current_user},
-    ideas::{submit_idea, get_ideas, get_pending_ideas, approve_idea, vote_idea},
+    ideas::{submit_idea, get_ideas, get_ideas_by_status, update_idea_status, vote_idea},
 };
 use middleware::Authentication;
 
@@ -25,6 +27,13 @@ async fn main() -> std::io::Result<()> {
     let port = config::get_port();
     let frontend_url = std::env::var("FRONTEND_URL").expect("FRONTEND_URL must be set");
 
+    // Configure rate limiting: 10 requests per minute
+    let governor_conf = GovernorConfigBuilder::default()
+        .per_second(60)
+        .burst_size(10)
+        .finish()
+        .unwrap();
+
     println!("Server running at http://localhost:{}", port);
 
     HttpServer::new(move || {
@@ -36,6 +45,7 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .wrap(cors)
             .wrap(Logger::default())
+            .wrap(Governor::new(&governor_conf))  // Add rate limiting
             .wrap(Authentication)
             .app_data(web::Data::new(database.clone()))
             .service(
@@ -47,8 +57,8 @@ async fn main() -> std::io::Result<()> {
                     .service(get_current_user)
                     .service(submit_idea)
                     .service(get_ideas)
-                    .service(get_pending_ideas)
-                    .service(approve_idea)
+                    .service(get_ideas_by_status)
+                    .service(update_idea_status)
                     .service(vote_idea)
             )
     })
