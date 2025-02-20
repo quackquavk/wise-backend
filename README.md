@@ -157,10 +157,10 @@ Response: 200 OK
 
 ### Ideas Management
 
-#### Submit New Idea (Authenticated Users)
+#### Submit New Idea
 ```http
 POST /ideas
-Authorization: Bearer <admin-token>
+Authorization: Bearer <token>
 Content-Type: application/json
 
 {
@@ -174,7 +174,7 @@ Response: 201 Created
 }
 ```
 
-Note: Any authenticated user can submit ideas. Ideas are automatically approved.
+Note: Any authenticated user can submit ideas. All ideas start with status "idea" and are automatically approved.
 
 #### Get All Ideas
 ```http
