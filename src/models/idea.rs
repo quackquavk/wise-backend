@@ -66,4 +66,14 @@ pub struct UpdateIdeaStatusDto {
 pub enum VoteType {
     Upvote,
     Downvote,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DeletedIdea {
+    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
+    pub id: Option<ObjectId>,
+    pub original_id: ObjectId,
+    pub deleted_by: String,  // Admin's email
+    pub deleted_at: DateTime,
+    pub idea_data: Idea,  // Store the complete idea data
 } 

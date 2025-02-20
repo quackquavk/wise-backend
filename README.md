@@ -245,6 +245,24 @@ Response: 400 Bad Request
 }
 ```
 
+#### Delete Idea (Admin Only)
+```http
+DELETE /ideas/{idea_id}
+Authorization: Bearer <admin-token>
+
+Response: 200 OK
+{
+    "message": "Idea deleted successfully"
+}
+
+Response: 404 Not Found
+{
+    "message": "Idea not found"
+}
+```
+
+Note: When an idea is deleted, it is moved to a separate collection for record-keeping. Only administrators can delete ideas.
+
 #### Toggle Upvote on an Idea
 ```http
 POST /ideas/{idea_id}/upvote

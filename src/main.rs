@@ -6,12 +6,11 @@ mod models;
 use actix_cors::Cors;
 use actix_web::{middleware::Logger, web, App, HttpServer};
 use actix_governor::{Governor, GovernorConfigBuilder};
-use std::time::Duration;
 use dotenv::dotenv;
 use handlers::{
     auth::{google_auth, google_auth_callback},
     protected_example::{protected_route, admin_route, get_current_user},
-    ideas::{submit_idea, get_ideas, get_ideas_by_status, update_idea_status, vote_idea},
+    ideas::{submit_idea, get_ideas, get_ideas_by_status, update_idea_status, vote_idea, delete_idea},
 };
 use middleware::Authentication;
 
@@ -29,12 +28,11 @@ async fn main() -> std::io::Result<()> {
 
     // Configure rate limiting: 10 requests per minute
     let governor_conf = GovernorConfigBuilder::default()
-        .per_second(60)
-        .burst_size(10)
+        .per_second(1)
+        .burst_size(60)
         .finish()
         .unwrap();
 
-    println!("Server running at http://localhost:{}", port);
 
     HttpServer::new(move || {
         let cors = Cors::default()
@@ -61,6 +59,7 @@ async fn main() -> std::io::Result<()> {
                     .service(get_ideas_by_status)
                     .service(update_idea_status)
                     .service(vote_idea)
+                    .service(delete_idea)
             )
     })
     .bind(("127.0.0.1", port))?

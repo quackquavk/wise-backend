@@ -1,4 +1,4 @@
-use actix_web::{post, get, put, HttpMessage, HttpRequest, HttpResponse, web};
+use actix_web::{post, get, put, delete, HttpMessage, HttpRequest, HttpResponse, web};
 use chrono::Utc;
 use mongodb::{Database, bson::{doc, oid::ObjectId}};
 use validator::Validate;
@@ -6,7 +6,7 @@ use validator::Validate;
 use crate::{
     middleware::auth::{require_auth, require_admin},
     models::{
-        idea::{Idea, CreateIdeaDto, IdeaStatus, UpdateIdeaStatusDto},
+        idea::{Idea, CreateIdeaDto, IdeaStatus, UpdateIdeaStatusDto, DeletedIdea},
         user::User,
     },
 };
@@ -358,5 +358,68 @@ pub async fn get_idea(
         },
         Ok(None) => HttpResponse::NotFound().json("Idea not found"),
         Err(_) => HttpResponse::InternalServerError().json("Failed to fetch idea"),
+    }
+}
+
+#[delete("/ideas/{id}")]
+pub async fn delete_idea(
+    req: HttpRequest,
+    db: web::Data<Database>,
+    id: web::Path<String>,
+) -> HttpResponse {
+    // Only admins can delete ideas
+    let extensions = req.extensions();
+    let admin = match require_admin(&extensions) {
+        Ok(user) => user,
+        Err(e) => return HttpResponse::Unauthorized().json(e.to_string()),
+    };
+
+    // Convert string ID to ObjectId
+    let idea_id = match ObjectId::parse_str(id.as_str()) {
+        Ok(id) => id,
+        Err(_) => return HttpResponse::BadRequest().json("Invalid idea ID"),
+    };
+
+    let ideas_collection = db.collection::<Idea>("ideas");
+    let deleted_ideas_collection = db.collection::<DeletedIdea>("deleted_ideas");
+
+    // First, get the idea to be deleted
+    let idea = match ideas_collection
+        .find_one(doc! { "_id": idea_id }, None)
+        .await
+    {
+        Ok(Some(idea)) => idea,
+        Ok(None) => return HttpResponse::NotFound().json("Idea not found"),
+        Err(_) => return HttpResponse::InternalServerError().json("Database error"),
+    };
+
+    // Create deleted idea record
+    let deleted_idea = DeletedIdea {
+        id: None,
+        original_id: idea_id,
+        deleted_by: admin.email.clone(),
+        deleted_at: mongodb::bson::DateTime::from_millis(Utc::now().timestamp_millis()),
+        idea_data: idea.clone(),
+    };
+
+    // Insert into deleted_ideas collection
+    match deleted_ideas_collection.insert_one(deleted_idea, None).await {
+        Ok(_) => {
+            // Now delete from main ideas collection
+            match ideas_collection
+                .delete_one(doc! { "_id": idea_id }, None)
+                .await
+            {
+                Ok(result) => {
+                    if result.deleted_count == 0 {
+                        HttpResponse::NotFound().json("Idea not found")
+                    } else {
+                        HttpResponse::Ok().json("Idea deleted successfully")
+                    }
+                }
+                Err(_) => HttpResponse::InternalServerError().json("Failed to delete idea"),
+            }
+        }
+        Err(_) => HttpResponse::InternalServerError().json("Failed to archive deleted idea"),
     }
 } 

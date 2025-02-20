@@ -1,5 +1,5 @@
 use actix_web::{
-    dev::ServiceRequest, error::ErrorUnauthorized, http::header, Error, HttpMessage,
+    dev::ServiceRequest, error::ErrorUnauthorized, http::header, Error,
     dev::Extensions,
 };
 use jsonwebtoken::{decode, DecodingKey, TokenData, Validation};

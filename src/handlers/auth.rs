@@ -5,8 +5,7 @@ use jsonwebtoken::{encode, EncodingKey, Header};
 use mongodb::{Database, bson::doc};
 use oauth2::{
     basic::BasicClient, AuthUrl, ClientId, ClientSecret, CsrfToken,
-    RedirectUrl, Scope, TokenUrl, TokenResponse, StandardTokenResponse,
-    EmptyExtraTokenFields, basic::BasicTokenType
+    RedirectUrl, Scope, TokenUrl, TokenResponse
 };
 use serde::{Deserialize, Serialize};
 use validator::Validate;
