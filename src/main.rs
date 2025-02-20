@@ -38,6 +38,7 @@ async fn main() -> std::io::Result<()> {
         let cors = Cors::default()
             .allowed_origin(&frontend_url)
             .allowed_origin("https://www.rebuzzai.com")
+            .allowed_origin("http://localhost:5173")
             .allow_any_method()
             .allow_any_header();
 
