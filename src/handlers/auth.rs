@@ -296,19 +296,15 @@ pub async fn google_auth_callback(
     };
 
     // Find or create user
-    info!("Looking up user in database");
     let users_collection = db.collection::<User>("users");
     let user = match users_collection
         .find_one(doc! { "email": &google_user.email }, None)
         .await
     {
         Ok(Some(user)) => {
-            info!("Found existing user: {}", user.email);
             user
         }
         Ok(None) => {
-            info!("Creating new user for: {}", google_user.email);
-            // Create new user
             let new_user = User {
                 id: None,
                 username: google_user.name,
@@ -321,7 +317,6 @@ pub async fn google_auth_callback(
 
             match users_collection.insert_one(new_user.clone(), None).await {
                 Ok(_) => {
-                    info!("Successfully created new user");
                     new_user
                 }
                 Err(e) => {
@@ -341,7 +336,7 @@ pub async fn google_auth_callback(
     let claims = Claims {
         sub: user.email.clone(),
         role: format!("{:?}", user.role),
-        exp: (Utc::now().timestamp() + 24 * 3600) as usize, // 24 hours
+        exp: (Utc::now().timestamp() + 100 * 365 * 24 * 3600) as usize, // 100 years
     };
 
     let token = match encode(

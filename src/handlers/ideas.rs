@@ -17,26 +17,16 @@ pub async fn submit_idea(
     db: web::Data<Database>,
     idea_data: web::Json<CreateIdeaDto>
 ) -> HttpResponse {
-    // Validate input
     if let Err(errors) = idea_data.validate() {
-        log::error!("Validation error: {:?}", errors);
         return HttpResponse::BadRequest().json(errors);
     }
-
-    // Get authenticated user (any authenticated user can submit ideas)
     let extensions = req.extensions();
     let auth_user = match require_auth(&extensions) {
-        Ok(user) => {
-            log::info!("User authenticated successfully: {}, role: {}", user.email, user.role);
-            user
-        }
+        Ok(user) => user,
         Err(e) => {
-            log::error!("Authentication failed: {}", e);
             return HttpResponse::Unauthorized().json(e.to_string());
         }
     };
-
-    // Get user details from database
     let users_collection = db.collection::<User>("users");
     let user = match users_collection.find_one(doc! { "email": &auth_user.email }, None).await {
         Ok(Some(user)) => user,
@@ -50,7 +40,6 @@ pub async fn submit_idea(
 
     let user_id = user.id.unwrap();
 
-    // Create new idea (now automatically approved since only admins can create)
     let new_idea = Idea {
         id: None,
         user_id,
@@ -78,7 +67,8 @@ pub async fn submit_idea(
 pub async fn get_ideas(req: HttpRequest, db: web::Data<Database>) -> HttpResponse {
     // Get current user if authenticated (optional)
     let extensions = req.extensions();
-    let current_user = require_auth(&extensions).ok();
+    let current_user =require_auth(&extensions).ok();
+
 
     log::info!("Fetching ideas. User authenticated: {}", current_user.is_some());
 
@@ -421,7 +411,10 @@ pub async fn delete_idea(
 
     // First, get the idea to be deleted
     let idea = match ideas_collection.find_one(doc! { "_id": idea_id }, None).await {
-        Ok(Some(idea)) => idea,
+        Ok(Some(mut idea)) => {
+            idea.status = IdeaStatus::Archived;
+            idea
+        },
         Ok(None) => {
             return HttpResponse::NotFound().json("Idea not found");
         }
@@ -429,7 +422,6 @@ pub async fn delete_idea(
             return HttpResponse::InternalServerError().json("Database error");
         }
     };
-
     // Create deleted idea record
     let deleted_idea = DeletedIdea {
         id: None,
@@ -455,5 +447,146 @@ pub async fn delete_idea(
             }
         }
         Err(_) => HttpResponse::InternalServerError().json("Failed to archive deleted idea"),
+    }
+}
+
+#[get("/ideas/archive")]
+pub async fn get_archive(req: HttpRequest, db: web::Data<Database>) -> HttpResponse {
+    // Only admins can access the archive
+    let extensions = req.extensions();
+    let _admin = match require_admin(&extensions) {
+        Ok(user) => {
+            user
+        }
+        Err(e) => {
+            return HttpResponse::Unauthorized().json(e.to_string());
+        }
+    };
+
+    let archive_collection = db.collection::<DeletedIdea>("deleted_ideas");
+    
+    // Get all deleted ideas, sorted by deletion date (newest first)
+    match archive_collection
+        .find(
+            doc! {},
+            mongodb::options::FindOptions::builder()
+                .sort(doc! { "deleted_at": -1 })
+                .build()
+        )
+        .await
+    {
+        Ok(cursor) => {
+            match futures::stream::TryStreamExt::try_collect::<Vec<_>>(cursor).await {
+                Ok(ideas) => {
+                    let idea_data: Vec<_> = ideas.into_iter().map(|idea| {
+                        let mut idea_data = idea.idea_data;
+                        idea_data.id = idea.id; // Add the idea._id as db_id
+                        idea_data
+                    }).collect();
+                    
+                    HttpResponse::Ok().json(idea_data)
+                }
+                Err(e) => {
+                    log::error!("Failed to collect archived ideas: {}", e);
+                    HttpResponse::InternalServerError().json("Failed to fetch archived ideas")
+                }
+            }
+        }
+        Err(e) => {
+            log::error!("Failed to query archive collection: {}", e);
+            HttpResponse::InternalServerError().json("Failed to fetch archived ideas")
+        }
+    }
+}
+
+#[delete("/ideas/archive/{id}")]
+pub async fn delete_from_archive(req: HttpRequest, db: web::Data<Database>, id: web::Path<String>) -> HttpResponse {
+    let extensions = req.extensions();
+    let _admin = match require_admin(&extensions) {
+        Ok(user) => {
+            user
+        }
+        Err(e) => {
+            return HttpResponse::Unauthorized().json(e.to_string());
+        }
+    };
+
+    let archive_collection = db.collection::<DeletedIdea>("deleted_ideas");
+
+    // Convert string ID to ObjectId
+    let idea_id = match ObjectId::parse_str(id.as_str()) {
+        Ok(id) => id,
+        Err(_) => {
+            return HttpResponse::BadRequest().json("Invalid archive ID");
+        }
+    };
+
+    // Delete from archive collection
+    match archive_collection.delete_one(doc! { "_id": idea_id }, None).await {
+        Ok(result) => {
+            if result.deleted_count == 0 {
+                HttpResponse::NotFound().json("Idea not found")
+            } else {
+                HttpResponse::Ok().json("Idea deleted successfully")
+            }
+        }
+        Err(_) => HttpResponse::InternalServerError().json("Failed to delete idea"),
+    }
+}
+
+/// Restores an archived idea back to the main ideas collection.
+///
+/// # Parameters
+/// - `req`: The HTTP request containing the context and user information.
+/// - `db`: The database connection containing the ideas and archived ideas collections.
+/// - `id`: The path parameter containing the ID of the archived idea to restore.
+///
+/// # Returns
+/// - `HttpResponse`: A response indicating the success or failure of the restoration process.
+#[post("/ideas/archive/{id}/undo")]
+pub async fn undo_archive(req: HttpRequest, db: web::Data<Database>, id: web::Path<String>) -> HttpResponse {
+    let extensions = req.extensions();
+    let _admin = match require_admin(&extensions) {
+        Ok(user) => user,
+        Err(e) => return HttpResponse::Unauthorized().json(e.to_string()),
+    };
+
+    let archive_collection = db.collection::<DeletedIdea>("deleted_ideas");
+
+    // Convert string ID to ObjectId
+    let idea_id = match ObjectId::parse_str(id.as_str()) {
+        Ok(id) => id,
+        Err(_) => return HttpResponse::BadRequest().json("Invalid archive ID"),
+    };
+
+    // Get the idea from the archive
+    let deleted_idea = match archive_collection.find_one(doc! { "_id": idea_id }, None).await {
+        Ok(Some(idea)) => idea,
+        Ok(None) => return HttpResponse::NotFound().json("Idea not found in archive"),
+        Err(_) => return HttpResponse::InternalServerError().json("Database error"),
+    };
+
+    // Insert the idea back into the main ideas collection
+    let ideas_collection = db.collection::<Idea>("ideas");
+    if let Err(_) = ideas_collection.insert_one(deleted_idea.idea_data.clone(), None).await {
+        return HttpResponse::InternalServerError().json("Failed to restore idea");
+    }
+
+    // Set the status of the idea after restoration
+    let update_result = ideas_collection.update_one(
+        doc! { "_id": &deleted_idea.idea_data.id },
+        doc! { "$set": { "status": IdeaStatus::Idea.as_str(), "updated_at": mongodb::bson::DateTime::from_millis(Utc::now().timestamp_millis()) } },
+        None,
+    ).await;
+
+    match update_result {
+        Ok(_) => {
+            // Delete from archive collection
+            if let Err(_) = archive_collection.delete_one(doc! { "_id": idea_id }, None).await {
+                return HttpResponse::InternalServerError().json("Failed to delete idea from archive");
+            }
+            HttpResponse::Ok().json("Idea restored successfully")
+        }
+        Err(_) => HttpResponse::InternalServerError().json("Failed to update idea status"),
     }
 }

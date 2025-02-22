@@ -9,6 +9,7 @@ pub enum IdeaStatus {
     Idea,
     InProgress,
     Launched,
+    Archived,
 }
 
 impl fmt::Display for IdeaStatus {
@@ -17,6 +18,7 @@ impl fmt::Display for IdeaStatus {
             IdeaStatus::Idea => write!(f, "idea"),
             IdeaStatus::InProgress => write!(f, "in_progress"),
             IdeaStatus::Launched => write!(f, "launched"),
+            IdeaStatus::Archived => write!(f, "archived"),
         }
     }
 }
@@ -28,6 +30,7 @@ impl IdeaStatus {
             IdeaStatus::Idea => "idea",
             IdeaStatus::InProgress => "in_progress",
             IdeaStatus::Launched => "launched",
+            IdeaStatus::Archived => "archived",
         }
     }
 }

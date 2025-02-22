@@ -216,13 +216,10 @@ Response: 200 OK
 ]
 ```
 
-Note: Ideas within each status are sorted by creation date (newest first).
-
 Response: 400 Bad Request
 {
     "message": "Invalid status"
 }
-```
 
 #### Update Idea Status (Admin Only)
 ```http
@@ -262,6 +259,44 @@ Response: 404 Not Found
 ```
 
 Note: When an idea is deleted, it is moved to a separate collection for record-keeping. Only administrators can delete ideas.
+
+#### Get Archived Ideas (Admin Only)
+```http
+GET /ideas/archive
+Authorization: Bearer <admin-token>
+
+Response: 200 OK
+[
+    {
+        "id": "string",
+        "original_id": "string",
+        "deleted_by": "string",
+        "deleted_at": "timestamp",
+        "idea_data": {
+            // Complete idea data at the time of deletion
+            "id": "string",
+            "user_id": "string",
+            "username": "string",
+            "email": "string",
+            "title": "string",
+            "description": "string",
+            "is_approved": boolean,
+            "status": "idea" | "in_progress" | "launched",
+            "upvotes": number,
+            "upvoted_by": ["user_id"],
+            "created_at": "timestamp",
+            "updated_at": "timestamp"
+        }
+    }
+]
+```
+
+Response: 401 Unauthorized
+{
+    "message": "Admin access required"
+}
+
+Note: Archived ideas are sorted by deletion date (newest first). Only administrators can access the archive.
 
 #### Toggle Upvote on an Idea
 ```http
@@ -306,6 +341,84 @@ The upvote endpoint acts as a toggle:
 2. Second call: Removes the upvote if the user has already upvoted
 3. Each user can have at most one upvote on an idea at any time
 4. The upvote count is automatically incremented/decremented
+
+#### Undo Archived Idea (Admin Only)
+```http
+POST /ideas/archive/{id}/undo
+Authorization: Bearer <admin-token>
+
+Response: 200 OK
+{
+    "message": "Idea restored successfully"
+}
+
+Response: 400 Bad Request
+{
+    "message": "Invalid archive ID"
+}
+
+Response: 404 Not Found
+{
+    "message": "Idea not found in archive"
+}
+
+Response: 500 Internal Server Error
+{
+    "message": "Failed to restore idea"
+}
+```
+
+Note: When an idea is restored, its status is set to "idea".
+
+#### Get Idea by ID
+```http
+GET /ideas/{id}
+Authorization: Bearer <token> (optional)
+
+Response: 200 OK
+{
+    "id": "string",
+    "user_id": "string",
+    "username": "string",
+    "email": "string",
+    "title": "string",
+    "description": "string",
+    "is_approved": true,
+    "status": "idea" | "in_progress" | "launched",
+    "upvotes": number,
+    "has_upvoted": boolean,  // Only included if user is authenticated
+    "created_at": "timestamp",
+    "updated_at": "timestamp"
+}
+
+Response: 404 Not Found
+{
+    "message": "Idea not found"
+}
+```
+
+#### Vote on an Idea
+```http
+POST /ideas/{id}/upvote
+Authorization: Bearer <token>
+
+Response: 200 OK
+{
+    "message": "Upvote added successfully"
+}
+
+// When calling the same endpoint again (removing upvote)
+Response: 200 OK
+{
+    "message": "Upvote removed successfully"
+}
+```
+
+The upvote endpoint acts as a toggle:
+1. First call: Adds an upvote if the user hasn't upvoted
+2. Second call: Removes the upvote if the user has already upvoted
+3. Each user can have at most one upvote on an idea at any time
+4. The upvote count is automatically incremented/decremented.
 
 ## Error Handling
 
