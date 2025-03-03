@@ -6,7 +6,7 @@ use validator::Validate;
 use crate::{
     middleware::auth::{ require_auth, require_admin },
     models::{
-        idea::{ Idea, CreateIdeaDto, IdeaStatus, UpdateIdeaStatusDto, DeletedIdea },
+        idea::{ Idea, CreateIdeaDto, IdeaStatus, UpdateIdeaStatusDto, DeletedIdea, UpdateIdeaDto },
         user::User,
     },
 };
@@ -86,10 +86,8 @@ pub async fn get_ideas(req: HttpRequest, db: web::Data<Database>) -> HttpRespons
             log::info!("Successfully got cursor from MongoDB");
             match futures::stream::TryStreamExt::try_collect::<Vec<_>>(cursor).await {
                 Ok(ideas) => {
-                    log::info!("Successfully collected {} ideas", ideas.len());
                     // If user is authenticated, include whether they upvoted each idea
                     if let Some(user) = current_user {
-                        log::info!("Adding upvote status for user: {}", user.email);
                         match get_user_id(&db, &user.email).await {
                             Ok(user_id) => {
                                 let ideas_with_upvote_status: Vec<_> = ideas
@@ -134,74 +132,74 @@ pub async fn get_ideas(req: HttpRequest, db: web::Data<Database>) -> HttpRespons
     }
 }
 
-#[get("/ideas/status/{status}")]
-pub async fn get_ideas_by_status(
-    req: HttpRequest,
-    db: web::Data<Database>,
-    status: web::Path<String>
-) -> HttpResponse {
-    // Get current user if authenticated (optional)
-    let extensions = req.extensions();
-    let current_user = require_auth(&extensions).ok();
+// #[get("/ideas/status/{status}")]
+// pub async fn get_ideas_by_status(
+//     req: HttpRequest,
+//     db: web::Data<Database>,
+//     status: web::Path<String>
+// ) -> HttpResponse {
+//     // Get current user if authenticated (optional)
+//     let extensions = req.extensions();
+//     let current_user = require_auth(&extensions).ok();
 
-    // Parse status
-    let status = match status.as_str() {
-        "idea" => IdeaStatus::Idea,
-        "in_progress" => IdeaStatus::InProgress,
-        "launched" => IdeaStatus::Launched,
-        _ => {
-            return HttpResponse::BadRequest().json("Invalid status");
-        }
-    };
+//     // Parse status
+//     let status = match status.as_str() {
+//         "idea" => IdeaStatus::Idea,
+//         "in_progress" => IdeaStatus::InProgress,
+//         "launched" => IdeaStatus::Launched,
+//         _ => {
+//             return HttpResponse::BadRequest().json("Invalid status");
+//         }
+//     };
 
-    let ideas_collection = db.collection::<Idea>("ideas");
-    match
-        ideas_collection.find(
-            doc! { "is_approved": true, "status": status.as_str() },
-            mongodb::options::FindOptions
-                ::builder()
-                .sort(doc! { "created_at": -1 })
-                .build()
-        ).await
-    {
-        Ok(cursor) => {
-            match futures::stream::TryStreamExt::try_collect::<Vec<_>>(cursor).await {
-                Ok(ideas) => {
-                    if let Some(user) = current_user {
-                        let user_id = match get_user_id(&db, &user.email).await {
-                            Ok(id) => id,
-                            Err(_) => {
-                                return HttpResponse::InternalServerError().json(
-                                    "Failed to get user details"
-                                );
-                            }
-                        };
+//     let ideas_collection = db.collection::<Idea>("ideas");
+//     match
+//         ideas_collection.find(
+//             doc! { "is_approved": true, "status": status.as_str() },
+//             mongodb::options::FindOptions
+//                 ::builder()
+//                 .sort(doc! { "created_at": -1 })
+//                 .build()
+//         ).await
+//     {
+//         Ok(cursor) => {
+//             match futures::stream::TryStreamExt::try_collect::<Vec<_>>(cursor).await {
+//                 Ok(ideas) => {
+//                     if let Some(user) = current_user {
+//                         let user_id = match get_user_id(&db, &user.email).await {
+//                             Ok(id) => id,
+//                             Err(_) => {
+//                                 return HttpResponse::InternalServerError().json(
+//                                     "Failed to get user details"
+//                                 );
+//                             }
+//                         };
 
-                        let ideas_with_upvote_status: Vec<_> = ideas
-                            .into_iter()
-                            .map(|idea| {
-                                let mut idea_json = serde_json::to_value(&idea).unwrap();
-                                if let serde_json::Value::Object(ref mut map) = idea_json {
-                                    map.insert(
-                                        "has_upvoted".to_string(),
-                                        serde_json::Value::Bool(idea.upvoted_by.contains(&user_id))
-                                    );
-                                }
-                                idea_json
-                            })
-                            .collect();
+//                         let ideas_with_upvote_status: Vec<_> = ideas
+//                             .into_iter()
+//                             .map(|idea| {
+//                                 let mut idea_json = serde_json::to_value(&idea).unwrap();
+//                                 if let serde_json::Value::Object(ref mut map) = idea_json {
+//                                     map.insert(
+//                                         "has_upvoted".to_string(),
+//                                         serde_json::Value::Bool(idea.upvoted_by.contains(&user_id))
+//                                     );
+//                                 }
+//                                 idea_json
+//                             })
+//                             .collect();
 
-                        HttpResponse::Ok().json(ideas_with_upvote_status)
-                    } else {
-                        HttpResponse::Ok().json(ideas)
-                    }
-                }
-                Err(_) => HttpResponse::InternalServerError().json("Failed to fetch ideas"),
-            }
-        }
-        Err(_) => HttpResponse::InternalServerError().json("Failed to fetch ideas"),
-    }
-}
+//                         HttpResponse::Ok().json(ideas_with_upvote_status)
+//                     } else {
+//                         HttpResponse::Ok().json(ideas)
+//                     }
+//                 }
+//                 Err(_) => HttpResponse::InternalServerError().json("Failed to fetch ideas"),
+//             }
+//         }
+//         Err(_) => HttpResponse::InternalServerError().json("Failed to fetch ideas"),
+//     }
+// }
 
 #[put("/ideas/{id}/status")]
 pub async fn update_idea_status(
@@ -589,4 +587,32 @@ pub async fn undo_archive(req: HttpRequest, db: web::Data<Database>, id: web::Pa
         }
         Err(_) => HttpResponse::InternalServerError().json("Failed to update idea status"),
     }
+}
+
+#[put("/ideas/{id}")]
+pub async fn edit_idea(req: HttpRequest, db: web::Data<Database>, id: web::Path<String>, idea_data: web::Json<UpdateIdeaDto>) -> HttpResponse {
+    let extensions = req.extensions();
+    let _admin = match require_admin(&extensions) {
+        Ok(user) => user,
+        Err(e) => return HttpResponse::Unauthorized().json(e.to_string()),
+    };
+
+    let ideas_collection = db.collection::<Idea>("ideas");
+    let idea_id = match ObjectId::parse_str(id.as_str()) {
+        Ok(id) => id,
+        Err(_) => return HttpResponse::BadRequest().json("Invalid idea ID"),
+    };
+
+    let update_result = ideas_collection.update_one(
+        doc! { "_id": idea_id },
+        doc! { "$set": { "title": &idea_data.title, "description": &idea_data.description, "updated_at": mongodb::bson::DateTime::from_millis(Utc::now().timestamp_millis()) } },
+        None,
+    ).await;
+
+    match update_result {
+        Ok(_) => HttpResponse::Ok().json("Idea updated successfully"),
+        Err(_) => HttpResponse::InternalServerError().json("Failed to update idea"),
+    };
+
+    HttpResponse::Ok().json("Idea updated successfully")
 }

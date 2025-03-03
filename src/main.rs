@@ -10,7 +10,7 @@ use dotenv::dotenv;
 use handlers::{
     auth::{google_auth, google_auth_callback},
     protected_example::{protected_route, admin_route, get_current_user},
-    ideas::{submit_idea, get_ideas, get_ideas_by_status, update_idea_status, vote_idea, delete_idea, get_archive, delete_from_archive, undo_archive},
+    ideas::{submit_idea, get_ideas, update_idea_status, vote_idea, delete_idea, get_archive, delete_from_archive, undo_archive, edit_idea},
     health::health_check, 
 };
 use middleware::Authentication;
@@ -58,7 +58,7 @@ async fn main() -> std::io::Result<()> {
                     .service(get_current_user)
                     .service(submit_idea)
                     .service(get_ideas)
-                    .service(get_ideas_by_status)
+                    // .service(get_ideas_by_status)
                     .service(update_idea_status)
                     .service(vote_idea)
                     .service(delete_idea)
@@ -66,6 +66,7 @@ async fn main() -> std::io::Result<()> {
                     .service(health_check)
                     .service(delete_from_archive)
                     .service(undo_archive)
+                    .service(edit_idea)
             )
     })
     .bind(("127.0.0.1", port))?

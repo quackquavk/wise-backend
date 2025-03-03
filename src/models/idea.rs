@@ -66,6 +66,12 @@ pub struct UpdateIdeaStatusDto {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct UpdateIdeaDto {
+    pub title: String,
+    pub description: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub enum VoteType {
     Upvote,
     Downvote,
