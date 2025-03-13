@@ -2,7 +2,7 @@ use actix_web::{web, HttpResponse, post, put, get, HttpRequest};
 use bcrypt::{hash, verify, DEFAULT_COST};
 use chrono::Utc;
 use jsonwebtoken::{encode, EncodingKey, Header};
-use mongodb::{Database, bson::doc};
+use mongodb::bson::doc;
 use oauth2::{
     basic::BasicClient, AuthUrl, ClientId, ClientSecret, CsrfToken,
     RedirectUrl, Scope, TokenUrl, TokenResponse
@@ -15,7 +15,7 @@ use log::{info, warn, error};
 
 use crate::{
     models::user::{CreateUserDto, LoginDto, User, UserRole},
-    config::get_jwt_secret,
+    config::{get_jwt_secret, DatabaseConfig},
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -42,25 +42,41 @@ pub struct PromoteToAdminDto {
     pub email: String,
 }
 
-fn create_oauth_client() -> BasicClient {
-    let google_client_id = ClientId::new(
-        env::var("GOOGLE_CLIENT_ID").expect("Missing GOOGLE_CLIENT_ID"),
-    );
-    let google_client_secret = ClientSecret::new(
-        env::var("GOOGLE_CLIENT_SECRET").expect("Missing GOOGLE_CLIENT_SECRET"),
-    );
+fn create_oauth_client(service: &str) -> BasicClient {
+    let (client_id, client_secret) = match service {
+        "cvai" => (
+            ClientId::new(
+                env::var("GOOGLE_CLIENT_ID_CVAI").expect("Missing GOOGLE_CLIENT_ID_CVAI"),
+            ),
+            ClientSecret::new(
+                env::var("GOOGLE_CLIENT_SECRET_CVAI").expect("Missing GOOGLE_CLIENT_SECRET_CVAI"),
+            )
+        ),
+        _ => (  // default to wise
+            ClientId::new(
+                env::var("GOOGLE_CLIENT_ID_WISE").expect("Missing GOOGLE_CLIENT_ID_WISE"),
+            ),
+            ClientSecret::new(
+                env::var("GOOGLE_CLIENT_SECRET_WISE").expect("Missing GOOGLE_CLIENT_SECRET_WISE"),
+            )
+        )
+    };
+
     let auth_url = AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string())
         .expect("Invalid authorization endpoint URL");
     let token_url = TokenUrl::new("https://www.googleapis.com/oauth2/v3/token".to_string())
         .expect("Invalid token endpoint URL");
+
+    // Use service-specific redirect URIs
+    let redirect_uri_env = "GOOGLE_REDIRECT_URI_WISE";
     let redirect_url = RedirectUrl::new(
-        env::var("GOOGLE_REDIRECT_URI").expect("Missing GOOGLE_REDIRECT_URI"),
+        env::var(redirect_uri_env).expect(&format!("Missing {}", redirect_uri_env)),
     )
     .expect("Invalid redirect URL");
 
     BasicClient::new(
-        google_client_id,
-        Some(google_client_secret),
+        client_id,
+        Some(client_secret),
         auth_url,
         Some(token_url),
     )
@@ -69,13 +85,23 @@ fn create_oauth_client() -> BasicClient {
 
 #[post("/register")]
 pub async fn register(
-    db: web::Data<Database>,
+    req: HttpRequest,
+    db_config: web::Data<DatabaseConfig>,
     user_data: web::Json<CreateUserDto>,
 ) -> HttpResponse {
     // Validate input
     if let Err(errors) = user_data.validate() {
         return HttpResponse::BadRequest().json(errors);
     }
+
+    // Get service from header
+    let service = req
+        .headers()
+        .get("x-service")
+        .and_then(|service_header| service_header.to_str().ok())
+        .unwrap_or("wise");  // Default to 'wise' for backward compatibility
+
+    let db = db_config.get_database_for_service(service);
 
     let users_collection = db.collection::<User>("users");
     
@@ -126,13 +152,23 @@ pub async fn register(
 
 #[post("/login")]
 pub async fn login(
-    db: web::Data<Database>,
+    req: HttpRequest,
+    db_config: web::Data<DatabaseConfig>,
     login_data: web::Json<LoginDto>,
 ) -> HttpResponse {
     // Validate input
     if let Err(errors) = login_data.validate() {
         return HttpResponse::BadRequest().json(errors);
     }
+
+    // Get service from header
+    let service = req
+        .headers()
+        .get("x-service")
+        .and_then(|service_header| service_header.to_str().ok())
+        .unwrap_or("wise");  // Default to 'wise' for backward compatibility
+
+    let db = db_config.get_database_for_service(service);
 
     let users_collection = db.collection::<User>("users");
     
@@ -173,10 +209,10 @@ pub async fn login(
 
 #[put("/promote-admin")]
 pub async fn promote_to_admin(
-    db: web::Data<Database>,
+    db: web::Data<DatabaseConfig>,
     user_data: web::Json<PromoteToAdminDto>,
 ) -> HttpResponse {
-    let users_collection = db.collection::<User>("users");
+    let users_collection = db.get_database_for_service("wise").collection::<User>("users");
     
     // Update user role to admin
     match users_collection
@@ -199,16 +235,42 @@ pub async fn promote_to_admin(
 }
 
 #[get("/auth/google")]
-pub async fn google_auth() -> HttpResponse {
-    info!("Starting Google OAuth flow");
-    let client = create_oauth_client();
-    let (auth_url, csrf_token) = client
-        .authorize_url(CsrfToken::new_random)
+pub async fn google_auth(req: HttpRequest) -> HttpResponse {
+    // Get service from query parameter first, then fallback to header
+    let service = req.query_string()
+        .split('&')
+        .find(|s| s.starts_with("service="))
+        .and_then(|s| s.split('=').nth(1))
+        .or_else(|| {
+            req.headers()
+                .get("x-service")
+                .and_then(|service_header| service_header.to_str().ok())
+        })
+        .unwrap_or("wise");
+
+    // Validate service
+    let service = match service {
+        "cvai" | "wise" => service,
+        _ => "wise"  // default to wise for invalid services
+    };
+
+    info!("Starting Google OAuth flow for service: {}", service);
+    let client = create_oauth_client(service);
+    
+    // Generate a random CSRF token
+    let csrf_token = CsrfToken::new_random();
+    
+    // Create a combined state with service and CSRF token
+    let combined_state = format!("{}:{}", service, csrf_token.secret());
+    info!("Generated combined state: {}", combined_state);
+    
+    let (auth_url, _) = client
+        .authorize_url(|| CsrfToken::new(combined_state.clone()))
         .add_scope(Scope::new("email".to_string()))
         .add_scope(Scope::new("profile".to_string()))
         .url();
 
-    info!("Generated Google auth URL with CSRF token: {}", csrf_token.secret());
+    info!("Generated Google auth URL with state parameter");
     info!("Redirecting to Google auth URL");
 
     HttpResponse::Found()
@@ -219,18 +281,54 @@ pub async fn google_auth() -> HttpResponse {
 #[get("/auth/google/callback")]
 pub async fn google_auth_callback(
     req: HttpRequest,
-    db: web::Data<Database>,
+    db_config: web::Data<DatabaseConfig>,
 ) -> HttpResponse {
     info!("Received callback from Google OAuth");
     let query_string = req.query_string();
     info!("Callback query string: {}", query_string);
     
-    let frontend_url = env::var("FRONTEND_URL").expect("FRONTEND_URL must be set");
-    
     // Parse the query string
     let query_params: Vec<(String, String)> = url::form_urlencoded::parse(query_string.as_bytes())
         .into_owned()
         .collect();
+
+    // Extract state which contains service:csrf
+    let state = query_params
+        .iter()
+        .find(|(key, _)| key == "state")
+        .map(|(_, value)| value.clone());
+    
+    info!("Extracted state value: {:?}", state);
+
+    // Parse state to get service and csrf token
+    let (service, csrf) = match state {
+        Some(state_str) => {
+            let parts: Vec<&str> = state_str.split(':').collect();
+            if parts.len() == 2 {
+                info!("Successfully parsed service '{}' from state", parts[0]);
+                (parts[0].to_string(), parts[1].to_string())
+            } else {
+                warn!("Invalid state format, defaulting to 'wise' service");
+                ("wise".to_string(), state_str)
+            }
+        }
+        None => {
+            warn!("No state found, defaulting to 'wise' service");
+            ("wise".to_string(), String::new())
+        }
+    };
+
+    // Get the appropriate frontend URL based on service
+    let frontend_url = if service == "cvai" {
+        info!("Using CVAI frontend URL");
+        env::var("FRONTEND_URL_CVAI").expect("FRONTEND_URL_CVAI must be set")
+    } else {
+        info!("Using Wise frontend URL");
+        env::var("FRONTEND_URL_WISE").expect("FRONTEND_URL_WISE must be set")
+    };
+    info!("Selected frontend URL: {}", frontend_url);
+
+    info!("Processing OAuth callback for service: {}", service);
     
     let code = query_params
         .iter()
@@ -248,9 +346,11 @@ pub async fn google_auth_callback(
         }
     };
 
-    // Exchange the code for a token
+    let db = db_config.get_database_for_service(&service);
+
+    // Exchange the code for a token using the correct client
     info!("Exchanging authorization code for token");
-    let client = create_oauth_client();
+    let client = create_oauth_client(&service);
     let token_result = client
         .exchange_code(oauth2::AuthorizationCode::new(code))
         .request_async(oauth2::reqwest::async_http_client)

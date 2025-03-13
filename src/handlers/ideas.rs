@@ -9,17 +9,28 @@ use crate::{
         idea::{ Idea, CreateIdeaDto, IdeaStatus, UpdateIdeaStatusDto, DeletedIdea, UpdateIdeaDto },
         user::User,
     },
+    config::DatabaseConfig,
 };
 
 #[post("/ideas")]
 pub async fn submit_idea(
     req: HttpRequest,
-    db: web::Data<Database>,
+    db_config: web::Data<DatabaseConfig>,
     idea_data: web::Json<CreateIdeaDto>
 ) -> HttpResponse {
     if let Err(errors) = idea_data.validate() {
         return HttpResponse::BadRequest().json(errors);
     }
+
+    // Get service from header
+    let service = req
+        .headers()
+        .get("x-service")
+        .and_then(|service_header| service_header.to_str().ok())
+        .unwrap_or("wise");  // Default to 'wise' for backward compatibility
+
+    let db = db_config.get_database_for_service(service);
+
     let extensions = req.extensions();
     let auth_user = match require_auth(&extensions) {
         Ok(user) => user,
@@ -27,6 +38,7 @@ pub async fn submit_idea(
             return HttpResponse::Unauthorized().json(e.to_string());
         }
     };
+
     let users_collection = db.collection::<User>("users");
     let user = match users_collection.find_one(doc! { "email": &auth_user.email }, None).await {
         Ok(Some(user)) => user,
@@ -47,8 +59,8 @@ pub async fn submit_idea(
         email: user.email,
         title: idea_data.title.clone(),
         description: idea_data.description.clone(),
-        is_approved: true, // Auto-approve since we removed admin-only restriction
-        status: IdeaStatus::Idea, // Default status
+        is_approved: true,
+        status: IdeaStatus::Idea,
         upvotes: 0,
         upvoted_by: Vec::new(),
         created_at: mongodb::bson::DateTime::from_millis(Utc::now().timestamp_millis()),
@@ -64,13 +76,21 @@ pub async fn submit_idea(
 }
 
 #[get("/ideas")]
-pub async fn get_ideas(req: HttpRequest, db: web::Data<Database>) -> HttpResponse {
+pub async fn get_ideas(req: HttpRequest, db_config: web::Data<DatabaseConfig>) -> HttpResponse {
+    // Get service from header
+    let service = req
+        .headers()
+        .get("x-service")
+        .and_then(|service_header| service_header.to_str().ok())
+        .unwrap_or("wise");
+
+    let db = db_config.get_database_for_service(service);
+
     // Get current user if authenticated (optional)
     let extensions = req.extensions();
-    let current_user =require_auth(&extensions).ok();
+    let current_user = require_auth(&extensions).ok();
 
-
-    log::info!("Fetching ideas. User authenticated: {}", current_user.is_some());
+    log::info!("Fetching ideas for service: {}. User authenticated: {}", service, current_user.is_some());
 
     let ideas_collection = db.collection::<Idea>("ideas");
     match
@@ -86,6 +106,7 @@ pub async fn get_ideas(req: HttpRequest, db: web::Data<Database>) -> HttpRespons
             log::info!("Successfully got cursor from MongoDB");
             match futures::stream::TryStreamExt::try_collect::<Vec<_>>(cursor).await {
                 Ok(ideas) => {
+                    log::info!("Found {} ideas", ideas.len());
                     // If user is authenticated, include whether they upvoted each idea
                     if let Some(user) = current_user {
                         match get_user_id(&db, &user.email).await {
@@ -204,7 +225,7 @@ pub async fn get_ideas(req: HttpRequest, db: web::Data<Database>) -> HttpRespons
 #[put("/ideas/{id}/status")]
 pub async fn update_idea_status(
     req: HttpRequest,
-    db: web::Data<Database>,
+    db_config: web::Data<DatabaseConfig>,
     id: web::Path<String>,
     status_update: web::Json<UpdateIdeaStatusDto>
 ) -> HttpResponse {
@@ -213,6 +234,15 @@ pub async fn update_idea_status(
     if let Err(e) = require_admin(&extensions) {
         return HttpResponse::Unauthorized().json(e.to_string());
     }
+
+    // Get service from header
+    let service = req
+        .headers()
+        .get("x-service")
+        .and_then(|service_header| service_header.to_str().ok())
+        .unwrap_or("wise");
+
+    let db = db_config.get_database_for_service(service);
 
     // Convert string ID to ObjectId
     let idea_id = match ObjectId::parse_str(id.as_str()) {
@@ -259,7 +289,7 @@ async fn get_user_id(db: &Database, email: &str) -> Result<ObjectId, mongodb::er
 #[post("/ideas/{id}/upvote")]
 pub async fn vote_idea(
     req: HttpRequest,
-    db: web::Data<Database>,
+    db_config: web::Data<DatabaseConfig>,
     id: web::Path<String>
 ) -> HttpResponse {
     // Get authenticated user
@@ -270,6 +300,15 @@ pub async fn vote_idea(
             return HttpResponse::Unauthorized().json(e.to_string());
         }
     };
+
+    // Get service from header
+    let service = req
+        .headers()
+        .get("x-service")
+        .and_then(|service_header| service_header.to_str().ok())
+        .unwrap_or("wise");
+
+    let db = db_config.get_database_for_service(service);
 
     // Get user's ObjectId
     let user_id = match get_user_id(&db, &auth_user.email).await {
@@ -317,7 +356,6 @@ pub async fn vote_idea(
         }
     };
 
-    // Update the idea
     match ideas_collection.update_one(doc! { "_id": idea_id }, update, None).await {
         Ok(result) => {
             if result.modified_count == 0 {
@@ -338,12 +376,21 @@ pub async fn vote_idea(
 #[get("/ideas/{id}")]
 pub async fn get_idea(
     req: HttpRequest,
-    db: web::Data<Database>,
+    db_config: web::Data<DatabaseConfig>,
     id: web::Path<String>
 ) -> HttpResponse {
     // Get current user if authenticated (optional)
     let extensions = req.extensions();
     let current_user = require_auth(&extensions).ok();
+
+    // Get service from header
+    let service = req
+        .headers()
+        .get("x-service")
+        .and_then(|service_header| service_header.to_str().ok())
+        .unwrap_or("wise");
+
+    let db = db_config.get_database_for_service(service);
 
     // Convert string ID to ObjectId
     let idea_id = match ObjectId::parse_str(id.as_str()) {
@@ -384,7 +431,7 @@ pub async fn get_idea(
 #[delete("/ideas/{id}")]
 pub async fn delete_idea(
     req: HttpRequest,
-    db: web::Data<Database>,
+    db_config: web::Data<DatabaseConfig>,
     id: web::Path<String>
 ) -> HttpResponse {
     // Only admins can delete ideas
@@ -395,6 +442,15 @@ pub async fn delete_idea(
             return HttpResponse::Unauthorized().json(e.to_string());
         }
     };
+
+    // Get service from header
+    let service = req
+        .headers()
+        .get("x-service")
+        .and_then(|service_header| service_header.to_str().ok())
+        .unwrap_or("wise");
+
+    let db = db_config.get_database_for_service(service);
 
     // Convert string ID to ObjectId
     let idea_id = match ObjectId::parse_str(id.as_str()) {
@@ -420,6 +476,7 @@ pub async fn delete_idea(
             return HttpResponse::InternalServerError().json("Database error");
         }
     };
+
     // Create deleted idea record
     let deleted_idea = DeletedIdea {
         id: None,
@@ -449,17 +506,24 @@ pub async fn delete_idea(
 }
 
 #[get("/ideas/archive")]
-pub async fn get_archive(req: HttpRequest, db: web::Data<Database>) -> HttpResponse {
+pub async fn get_archive(req: HttpRequest, db_config: web::Data<DatabaseConfig>) -> HttpResponse {
     // Only admins can access the archive
     let extensions = req.extensions();
     let _admin = match require_admin(&extensions) {
-        Ok(user) => {
-            user
-        }
+        Ok(user) => user,
         Err(e) => {
             return HttpResponse::Unauthorized().json(e.to_string());
         }
     };
+
+    // Get service from header
+    let service = req
+        .headers()
+        .get("x-service")
+        .and_then(|service_header| service_header.to_str().ok())
+        .unwrap_or("wise");
+
+    let db = db_config.get_database_for_service(service);
 
     let archive_collection = db.collection::<DeletedIdea>("deleted_ideas");
     
@@ -498,16 +562,27 @@ pub async fn get_archive(req: HttpRequest, db: web::Data<Database>) -> HttpRespo
 }
 
 #[delete("/ideas/archive/{id}")]
-pub async fn delete_from_archive(req: HttpRequest, db: web::Data<Database>, id: web::Path<String>) -> HttpResponse {
+pub async fn delete_from_archive(
+    req: HttpRequest, 
+    db_config: web::Data<DatabaseConfig>, 
+    id: web::Path<String>
+) -> HttpResponse {
     let extensions = req.extensions();
     let _admin = match require_admin(&extensions) {
-        Ok(user) => {
-            user
-        }
+        Ok(user) => user,
         Err(e) => {
             return HttpResponse::Unauthorized().json(e.to_string());
         }
     };
+
+    // Get service from header
+    let service = req
+        .headers()
+        .get("x-service")
+        .and_then(|service_header| service_header.to_str().ok())
+        .unwrap_or("wise");
+
+    let db = db_config.get_database_for_service(service);
 
     let archive_collection = db.collection::<DeletedIdea>("deleted_ideas");
 
@@ -542,12 +617,25 @@ pub async fn delete_from_archive(req: HttpRequest, db: web::Data<Database>, id: 
 /// # Returns
 /// - `HttpResponse`: A response indicating the success or failure of the restoration process.
 #[post("/ideas/archive/{id}/undo")]
-pub async fn undo_archive(req: HttpRequest, db: web::Data<Database>, id: web::Path<String>) -> HttpResponse {
+pub async fn undo_archive(
+    req: HttpRequest, 
+    db_config: web::Data<DatabaseConfig>, 
+    id: web::Path<String>
+) -> HttpResponse {
     let extensions = req.extensions();
     let _admin = match require_admin(&extensions) {
         Ok(user) => user,
         Err(e) => return HttpResponse::Unauthorized().json(e.to_string()),
     };
+
+    // Get service from header
+    let service = req
+        .headers()
+        .get("x-service")
+        .and_then(|service_header| service_header.to_str().ok())
+        .unwrap_or("wise");
+
+    let db = db_config.get_database_for_service(service);
 
     let archive_collection = db.collection::<DeletedIdea>("deleted_ideas");
 
@@ -590,12 +678,26 @@ pub async fn undo_archive(req: HttpRequest, db: web::Data<Database>, id: web::Pa
 }
 
 #[put("/ideas/{id}")]
-pub async fn edit_idea(req: HttpRequest, db: web::Data<Database>, id: web::Path<String>, idea_data: web::Json<UpdateIdeaDto>) -> HttpResponse {
+pub async fn edit_idea(
+    req: HttpRequest, 
+    db_config: web::Data<DatabaseConfig>, 
+    id: web::Path<String>, 
+    idea_data: web::Json<UpdateIdeaDto>
+) -> HttpResponse {
     let extensions = req.extensions();
     let _admin = match require_admin(&extensions) {
         Ok(user) => user,
         Err(e) => return HttpResponse::Unauthorized().json(e.to_string()),
     };
+
+    // Get service from header
+    let service = req
+        .headers()
+        .get("x-service")
+        .and_then(|service_header| service_header.to_str().ok())
+        .unwrap_or("wise");
+
+    let db = db_config.get_database_for_service(service);
 
     let ideas_collection = db.collection::<Idea>("ideas");
     let idea_id = match ObjectId::parse_str(id.as_str()) {
@@ -612,7 +714,5 @@ pub async fn edit_idea(req: HttpRequest, db: web::Data<Database>, id: web::Path<
     match update_result {
         Ok(_) => HttpResponse::Ok().json("Idea updated successfully"),
         Err(_) => HttpResponse::InternalServerError().json("Failed to update idea"),
-    };
-
-    HttpResponse::Ok().json("Idea updated successfully")
+    }
 }

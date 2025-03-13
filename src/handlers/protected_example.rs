@@ -1,7 +1,8 @@
 use actix_web::{get, HttpMessage, HttpRequest, HttpResponse};
-use mongodb::{Database, bson::doc};
+use mongodb::bson::doc;
 use crate::middleware::auth::{require_auth, require_admin};
 use crate::models::user::User;
+use crate::config::DatabaseConfig;
 
 #[get("/protected")]
 pub async fn protected_route(req: HttpRequest) -> HttpResponse {
@@ -32,7 +33,10 @@ pub async fn admin_route(req: HttpRequest) -> HttpResponse {
 }
 
 #[get("/user/me")]
-pub async fn get_current_user(req: HttpRequest, db: actix_web::web::Data<Database>) -> HttpResponse {
+pub async fn get_current_user(
+    req: HttpRequest, 
+    db_config: actix_web::web::Data<DatabaseConfig>
+) -> HttpResponse {
     // Get the extensions from the request
     let extensions = req.extensions();
     
@@ -41,6 +45,15 @@ pub async fn get_current_user(req: HttpRequest, db: actix_web::web::Data<Databas
         Ok(user) => user,
         Err(e) => return HttpResponse::Unauthorized().json(e.to_string()),
     };
+
+    // Get service from header
+    let service = req
+        .headers()
+        .get("x-service")
+        .and_then(|service_header| service_header.to_str().ok())
+        .unwrap_or("wise");
+
+    let db = db_config.get_database_for_service(service);
 
     // Get user details from database
     let users_collection = db.collection::<User>("users");

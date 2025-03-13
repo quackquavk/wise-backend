@@ -20,12 +20,14 @@ async fn main() -> std::io::Result<()> {
     dotenv().ok();
     env_logger::init();
 
-    let database = config::init_database()
+    let db_config = config::init_database()
         .await
-        .expect("Failed to connect to database");
+        .expect("Failed to connect to databases");
 
     let port = config::get_port();
-    let frontend_url = std::env::var("FRONTEND_URL").expect("FRONTEND_URL must be set");
+    let frontend_url = std::env::var("FRONTEND_URL_WISE").expect("FRONTEND_URL must be set");
+    let wise_url = std::env::var("WISE_URL").expect("WISE_URL must be set");
+    let cvai_url = std::env::var("CVAI_URL").expect("CVAI_URL must be set");
 
     // Configure rate limiting: 10 requests per minute
     let governor_conf = GovernorConfigBuilder::default()
@@ -34,21 +36,22 @@ async fn main() -> std::io::Result<()> {
         .finish()
         .unwrap();
 
-
     HttpServer::new(move || {
         let cors = Cors::default()
             .allowed_origin(&frontend_url)
-            .allowed_origin("https://www.rebuzzai.com")
+            .allowed_origin(&wise_url)
+            .allowed_origin(&cvai_url)
             .allowed_origin("http://localhost:5173")
             .allow_any_method()
-            .allow_any_header();
+            .allow_any_header()
+            .expose_headers(vec!["x-service"]);  // Expose service header
 
         App::new()
             .wrap(cors)
-            .wrap(Logger::default())
-            .wrap(Governor::new(&governor_conf))  // Add rate limiting
+            .wrap(Logger::new("%a %{User-Agent}i %r %s %b %{Referer}i %T").log_target("debug"))
+            .wrap(Governor::new(&governor_conf))
             .wrap(Authentication)
-            .app_data(web::Data::new(database.clone()))
+            .app_data(web::Data::new(db_config.clone()))
             .service(
                 web::scope("/api")
                     .service(google_auth)
@@ -58,7 +61,6 @@ async fn main() -> std::io::Result<()> {
                     .service(get_current_user)
                     .service(submit_idea)
                     .service(get_ideas)
-                    // .service(get_ideas_by_status)
                     .service(update_idea_status)
                     .service(vote_idea)
                     .service(delete_idea)
