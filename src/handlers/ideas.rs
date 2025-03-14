@@ -60,7 +60,7 @@ pub async fn submit_idea(
         title: idea_data.title.clone(),
         description: idea_data.description.clone(),
         is_approved: true,
-        status: IdeaStatus::Idea,
+        status: IdeaStatus::Launched,
         upvotes: 0,
         upvoted_by: Vec::new(),
         created_at: mongodb::bson::DateTime::from_millis(Utc::now().timestamp_millis()),
