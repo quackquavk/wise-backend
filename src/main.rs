@@ -25,9 +25,6 @@ async fn main() -> std::io::Result<()> {
         .expect("Failed to connect to databases");
 
     let port = config::get_port();
-    let frontend_url = std::env::var("FRONTEND_URL_WISE").expect("FRONTEND_URL must be set");
-    let wise_url = std::env::var("WISE_URL").expect("WISE_URL must be set");
-    let cvai_url = std::env::var("CVAI_URL").expect("CVAI_URL must be set");
 
     // Configure rate limiting: 10 requests per minute
     let governor_conf = GovernorConfigBuilder::default()
@@ -38,13 +35,21 @@ async fn main() -> std::io::Result<()> {
 
     HttpServer::new(move || {
         let cors = Cors::default()
-            .allowed_origin(&frontend_url)
-            .allowed_origin(&wise_url)
-            .allowed_origin(&cvai_url)
-            .allowed_origin("http://localhost:5173")
-            .allow_any_method()
-            .allow_any_header()
-            .expose_headers(vec!["x-service"]);  // Expose service header
+        .allowed_origin_fn(|origin, _req_head| {
+        let origin_str = origin.to_str().unwrap_or("");
+        let allowed = [
+            "https://rebuzz.ai",
+            "https://cvai.dev",
+            "http://localhost:5173",
+        ];
+        allowed.iter().any(|&allowed_origin| {
+            origin_str == allowed_origin || 
+            origin_str == format!("{}/", allowed_origin)
+        })
+    })
+    .allow_any_method()
+    .allow_any_header()
+    .expose_headers(vec!["x-service"]);
 
         App::new()
             .wrap(cors)
