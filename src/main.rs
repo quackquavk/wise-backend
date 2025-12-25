@@ -33,23 +33,15 @@ async fn main() -> std::io::Result<()> {
         .finish()
         .unwrap();
 
-    HttpServer::new(move || {
-        let cors = Cors::default()
-        .allowed_origin_fn(|origin, _req_head| {
-        let origin_str = origin.to_str().unwrap_or("");
-        let allowed = [
-            "https://rebuzz.ai",
-            "https://cvai.dev",
-            "http://localhost:5173",
-        ];
-        allowed.iter().any(|&allowed_origin| {
-            origin_str == allowed_origin || 
-            origin_str == format!("{}/", allowed_origin)
-        })
-    })
-    .allow_any_method()
-    .allow_any_header()
-    .expose_headers(vec!["x-service"]);
+   HttpServer::new(move || {
+    let cors = Cors::default()
+        .allowed_origin("https://rebuzz.ai")
+        .allowed_origin("https://cvai.dev")
+        .allowed_origin("http://localhost:5173")
+        .allow_any_method()
+        .allow_any_header()
+        .expose_headers(vec!["x-service"])
+        .max_age(3600);
 
         App::new()
             .wrap(cors)
