@@ -38,6 +38,7 @@ async fn main() -> std::io::Result<()> {
         .allowed_origin("https://rebuzz.ai")
         .allowed_origin("https://cvai.dev")
         .allowed_origin("http://localhost:5173")
+        .allowed_origin("https://www.cvai.dev")
         .allow_any_method()
         .allow_any_header()
         .expose_headers(vec!["x-service"])
